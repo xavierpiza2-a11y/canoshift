@@ -1,0 +1,17 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Données persistantes locales (ne jamais écraser lors d'un git pull)
+data/**/*.json
+data/*.json
+data/**/*.tmp
+data/*.tmp
+data/**/*.bak
+!data/.gitkeep
+!data/stores/.gitkeep

@@ -1,0 +1,8 @@
+{
+  "name": "CanoShift · by NEVO v1",
+  "description": "Application mobile de gestion et consultation des plannings de d\u0027équipe pour magasin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

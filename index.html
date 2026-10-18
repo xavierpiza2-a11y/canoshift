@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="fr" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function() {
+        if (typeof window === 'undefined') return;
+
+        // 1. Mock WebSocket for Vite HMR to prevent failing connection in sandboxed iframe
+        if (window.WebSocket) {
+          var NativeWebSocket = window.WebSocket;
+          function SafeWebSocket(url, protocols) {
+            var isViteHMR = (protocols === 'vite-hmr') ||
+              (typeof url === 'string' && (url.indexOf('token=') !== -1 || url.indexOf('vite') !== -1));
+
+            if (isViteHMR) {
+              var target = new EventTarget();
+              target.url = url;
+              target.protocol = protocols || 'vite-hmr';
+              target.readyState = 1; // WebSocket.OPEN
+              target.CONNECTING = 0;
+              target.OPEN = 1;
+              target.CLOSING = 2;
+              target.CLOSED = 3;
+              target.bufferedAmount = 0;
+              target.extensions = '';
+              target.binaryType = 'blob';
+              target.send = function() {};
+              target.close = function() {};
+              target.onopen = null;
+              target.onmessage = null;
+              target.onerror = null;
+              target.onclose = null;
+              setTimeout(function() {
+                if (typeof target.onopen === 'function') target.onopen(new Event('open'));
+                target.dispatchEvent(new Event('open'));
+              }, 0);
+              return target;
+            }
+            return new NativeWebSocket(url, protocols);
+          }
+          SafeWebSocket.prototype = NativeWebSocket.prototype;
+          SafeWebSocket.CONNECTING = 0;
+          SafeWebSocket.OPEN = 1;
+          SafeWebSocket.CLOSING = 2;
+          SafeWebSocket.CLOSED = 3;
+          window.WebSocket = SafeWebSocket;
+        }
+
+        // 2. Filter out console errors for Vite HMR WebSocket
+        var origConsoleError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var msg = args.map(function(a) { return String(a || ''); }).join(' ');
+          if (msg.indexOf('WebSocket closed without opened') !== -1 || msg.indexOf('[vite] failed to connect to websocket') !== -1) {
+            return;
+          }
+          return origConsoleError.apply(console, args);
+        };
+
+        // 3. Catch window unhandled errors
+        window.addEventListener('error', function (event) {
+          var msg = (event && (event.message || (event.error && event.error.message))) || '';
+          if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('[vite]') !== -1)) {
+            event.stopImmediatePropagation();
+            event.preventDefault();
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function (event) {
+          var msg = (event && event.reason && (event.reason.message || event.reason)) || '';
+          if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('[vite]') !== -1)) {
+            event.stopImmediatePropagation();
+            event.preventDefault();
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>CanoShift · by NEVO</title>
+    <meta name="description" content="CanoShift — Application moderne de gestion et consultation des plannings d'équipe avec synchronisation en temps réel." />
+    <meta property="og:title" content="CanoShift · by NEVO" />
+    <meta property="og:description" content="CanoShift — Application moderne de gestion et consultation des plannings d'équipe avec synchronisation en temps réel." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#020617" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="CanoShift" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('canoshift_theme');
+          var isDark = saved ? saved === 'dark' : true;
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="h-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased selection:bg-emerald-600 selection:text-white transition-colors duration-200">
+    <div id="root" class="h-full"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="symBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e" />
+      <stop offset="100%" stop-color="#15803d" />
+    </linearGradient>
+  </defs>
+  <!-- Stylized green leaf symbol -->
+  <path
+    d="M 145 375 C 135 270 215 150 380 130 C 375 295 255 375 145 375 Z"
+    fill="url(#symBg)"
+  />
+  <path
+    d="M 155 365 Q 260 260 340 170"
+    stroke="#ffffff"
+    stroke-width="18"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <path
+    d="M 245 275 L 305 235"
+    stroke="#ffffff"
+    stroke-width="14"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <path
+    d="M 220 295 L 255 290"
+    stroke="#ffffff"
+    stroke-width="14"
+    stroke-linecap="round"
+    fill="none"
+  />
+
+  <!-- Clock badge at bottom right -->
+  <g transform="translate(365, 365)">
+    <circle cx="0" cy="0" r="80" fill="#ffffff" stroke="#15803d" stroke-width="18" />
+    <circle cx="0" cy="0" r="5" fill="#15803d" />
+    <line x1="0" y1="0" x2="0" y2="-42" stroke="#15803d" stroke-width="16" stroke-linecap="round" />
+    <line x1="0" y1="0" x2="35" y2="24" stroke="#15803d" stroke-width="16" stroke-linecap="round" />
+  </g>
+</svg>
