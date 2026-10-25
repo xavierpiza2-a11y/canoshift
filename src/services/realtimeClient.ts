@@ -61,17 +61,42 @@ class RealtimeClient {
     }
   }
 
+  private sessionProvider: (() => Promise<string>) | null = null;
+  private connecting = false;
+
+  public setSessionProvider(fn: () => Promise<string>): void {
+    this.sessionProvider = fn;
+  }
+
   public connect(): void {
     if (typeof window === 'undefined') return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
+    if (this.connecting) return;
+    this.connecting = true;
 
     this.setStatus('connecting');
 
+    const getSession = this.sessionProvider ? this.sessionProvider() : Promise.resolve('');
+    getSession
+      .catch(() => '')
+      .then((session) => {
+        this.connecting = false;
+        if (!session) {
+          // pas encore authentifié : on réessaiera
+          this.setStatus('disconnected');
+          this.scheduleReconnect();
+          return;
+        }
+        this.openSocket(session);
+      });
+  }
+
+  private openSocket(session: string): void {
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      const wsUrl = `${protocol}//${window.location.host}${import.meta.env.BASE_URL}ws?session=${encodeURIComponent(session)}`;
 
       this.socket = new WebSocket(wsUrl);
 

@@ -41,7 +41,7 @@ function formatShiftCell(shiftText: string, hoursText: string, category: string)
 async function getLogoFullLightDataUrl(): Promise<string | null> {
   if (typeof window === 'undefined' || typeof document === 'undefined') return null;
   try {
-    const res = await fetch('/logo-full-light.svg');
+    const res = await fetch(`${import.meta.env.BASE_URL}logo-full-light.svg`);
     if (!res.ok) return null;
     const svgText = await res.text();
     const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });

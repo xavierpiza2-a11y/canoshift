@@ -71,14 +71,142 @@ export function setActiveStore(store: { id: string; name: string; token: string 
   localStorage.setItem(KEY_API_TOKEN, store.token.trim().toUpperCase());
 }
 
+// ---------------------------------------------------------------------------
+// SESSIONS D'AUTHENTIFICATION (en mémoire uniquement — jamais de PIN stocké)
+// ---------------------------------------------------------------------------
+let storeSession = '';
+let adminSession = '';
+let superSession = '';
+let authLost = false;
+let refreshing: Promise<boolean> | null = null;
+
+export function setStoreSession(session: string): void {
+  storeSession = session || '';
+  if (storeSession) authLost = false;
+}
+export function setAdminSession(session: string): void {
+  adminSession = session || '';
+}
+export function clearAdminSession(): void {
+  adminSession = '';
+}
+
 export function getStoreHeaders(): Record<string, string> {
   const storeId = getActiveStoreId();
   const headers: Record<string, string> = {};
   if (storeId) {
     headers['X-Store-Id'] = storeId;
   }
+  if (storeSession) headers['Authorization'] = `Bearer ${storeSession}`;
+  if (adminSession) headers['X-Admin-Session'] = adminSession;
   return headers;
 }
+
+function notifyAuthLost(): void {
+  if (typeof window === 'undefined') return;
+  if (!localStorage.getItem('planning_token_validated')) return;
+  window.dispatchEvent(new CustomEvent('canoshift:auth-lost'));
+}
+
+/** Obtient une nouvelle session magasin à partir de la clé mémorisée sur l'appareil. */
+export function refreshStoreSession(): Promise<boolean> {
+  if (authLost) return Promise.resolve(false);
+  if (refreshing) return refreshing;
+  const saved = (typeof window !== 'undefined' ? localStorage.getItem(KEY_API_TOKEN) : '') || '';
+  const token = saved.trim().toUpperCase();
+  if (!token) return Promise.resolve(false);
+
+  refreshing = (async () => {
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/verify-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.valid && data.session) {
+          setStoreSession(data.session);
+          return true;
+        }
+        if (data.valid === false) {
+          // La clé du magasin a changé : l'appareil doit ressaisir la nouvelle clé
+          authLost = true;
+          storeSession = '';
+          notifyAuthLost();
+        }
+      }
+    } catch {
+      // réseau indisponible : on réessaiera plus tard
+    }
+    return false;
+  })().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
+/** fetch avec session magasin / admin / gestionnaire, et renouvellement automatique de session. */
+export async function authFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const isSuperPath = input.includes('/api/superadmin');
+  const build = (): RequestInit => ({
+    ...init,
+    headers: {
+      ...((init.headers as Record<string, string>) || {}),
+      ...(isSuperPath ? {} : getStoreHeaders()),
+      ...(isSuperPath && superSession ? { 'X-Superadmin-Token': superSession } : {}),
+    },
+  });
+
+  if (!isSuperPath && !storeSession) {
+    await refreshStoreSession();
+  }
+  let res = await fetch(input, build());
+  if (res.status === 401 && !isSuperPath) {
+    if (await refreshStoreSession()) {
+      res = await fetch(input, build());
+    }
+  }
+  if (res.status === 403 && !isSuperPath && typeof window !== 'undefined') {
+    // Session administrateur expirée ou révoquée (PIN changé)
+    try {
+      const body = await res.clone().json();
+      if (body?.code === 'ADMIN_REQUIRED') {
+        clearAdminSession();
+        window.dispatchEvent(new CustomEvent('canoshift:admin-expired'));
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return res;
+}
+
+/** Télécharge un fichier protégé (les liens <a href> ne peuvent pas envoyer de session). */
+export async function downloadAuthed(path: string, filename: string): Promise<boolean> {
+  try {
+    const res = await authFetch(`${import.meta.env.BASE_URL}${path}`);
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Le WebSocket s'authentifie avec la session magasin
+realtimeClient.setSessionProvider(async () => {
+  if (!storeSession) await refreshStoreSession();
+  return storeSession;
+});
 
 function notifyDataChange(eventType: string, data: any) {
   if (typeof window !== 'undefined') {
@@ -278,7 +406,7 @@ export async function saveApiToken(newToken: string): Promise<boolean> {
     localStorage.setItem(KEY_API_TOKEN, token);
   }
   try {
-    const res = await fetch('/api/config', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -301,7 +429,7 @@ export async function verifyApiTokenWithStore(token: string): Promise<{
   const entered = (token || '').trim().toUpperCase();
   if (!entered) return { valid: false };
   try {
-    const res = await fetch('/api/verify-token', {
+    const res = await fetch(`${import.meta.env.BASE_URL}api/verify-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: entered }),
@@ -309,6 +437,7 @@ export async function verifyApiTokenWithStore(token: string): Promise<{
     if (res.ok) {
       const data = await res.json();
       if (data.valid && data.store) {
+        setStoreSession(data.session || '');
         setActiveStore(data.store);
         return { valid: true, store: data.store };
       }
@@ -338,11 +467,8 @@ export function setStoredAdminPin(newPin: string): void {
 
 export async function saveAdminPin(newPin: string): Promise<boolean> {
   const pin = (newPin || '').trim();
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY_ADMIN_PIN, pin);
-  }
   try {
-    const res = await fetch('/api/config', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -361,23 +487,20 @@ export async function verifyAdminPin(pin: string): Promise<boolean> {
   const entered = (pin || '').trim();
   if (entered.length !== 6) return false;
   try {
-    const res = await fetch('/api/verify-pin', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/verify-pin`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getStoreHeaders(),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: entered }),
     });
     if (res.ok) {
       const data = await res.json();
+      if (data.valid && data.adminSession) setAdminSession(data.adminSession);
       return Boolean(data.valid);
     }
   } catch {
-    // offline fallback
+    // serveur injoignable : l'accès administrateur exige le serveur
   }
-  const configured = getStoredAdminPin().trim();
-  return entered === configured;
+  return false;
 }
 
 export function getStoreName(): string {
@@ -417,7 +540,7 @@ export function getStoredTableau2Shifts(): Tableau2ShiftOption[] {
 
 export async function fetchConfig(): Promise<ConfigData> {
   try {
-    const res = await fetch('/api/config', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       headers: getStoreHeaders(),
     });
     if (res.ok) {
@@ -425,7 +548,7 @@ export async function fetchConfig(): Promise<ConfigData> {
       if (data.success && data.config) {
         const config: ConfigData = {
           storeName: data.config.storeName || DEFAULT_STORE_NAME,
-          apiToken: data.config.apiToken || DEFAULT_API_TOKEN,
+          apiToken: data.config.apiToken || getApiToken(),
           adminPin: data.config.adminPin || DEFAULT_ADMIN_PIN,
           employees: ensureResponsableAdmin(data.config.employees || DEFAULT_EMPLOYEES),
           visibleMonths: data.config.visibleMonths || DEFAULT_VISIBLE_MONTHS,
@@ -482,7 +605,7 @@ export async function saveStoreName(name: string): Promise<void> {
     localStorage.setItem(KEY_STORE_NAME, trimmed);
   }
   try {
-    await fetch('/api/config', {
+    await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -497,7 +620,7 @@ export async function saveStoreName(name: string): Promise<void> {
 
 export async function saveVisibleMonths(months: string[]): Promise<boolean> {
   try {
-    const res = await fetch('/api/config', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -524,7 +647,7 @@ export async function saveVisibleMonths(months: string[]): Promise<boolean> {
 
 export async function saveAllMonths(months: MonthItem[]): Promise<boolean> {
   try {
-    const res = await fetch('/api/config', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -552,7 +675,7 @@ export async function saveAllMonths(months: MonthItem[]): Promise<boolean> {
 export async function saveEmployees(employees: Employee[]): Promise<boolean> {
   const sanitized = ensureResponsableAdmin(employees);
   try {
-    const res = await fetch('/api/config', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -582,7 +705,7 @@ export async function saveStoredCategories(categories: ShiftCategoryItem[]): Pro
     localStorage.setItem(KEY_CACHED_CATEGORIES, JSON.stringify(categories));
   }
   try {
-    await fetch('/api/config', {
+    await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -600,7 +723,7 @@ export async function saveStoredTableau2Shifts(shifts: Tableau2ShiftOption[]): P
     localStorage.setItem(KEY_CACHED_TABLEAU2, JSON.stringify(shifts));
   }
   try {
-    await fetch('/api/config', {
+    await authFetch(`${import.meta.env.BASE_URL}api/config`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -634,7 +757,7 @@ export async function restoreExampleTableau2AndCategories(): Promise<{
 export async function resetToCleanStore(newStoreName?: string): Promise<void> {
   const store = (newStoreName || '').trim() || DEFAULT_STORE_NAME;
   try {
-    await fetch('/api/reset', {
+    await authFetch(`${import.meta.env.BASE_URL}api/reset`, {
       method: 'POST',
       headers: getStoreHeaders(),
     });
@@ -667,7 +790,7 @@ export async function saveStoredDayNotes(
     localStorage.setItem(`${KEY_DAY_NOTES_PREFIX}${monthKey}`, JSON.stringify(notes));
   }
   try {
-    await fetch(`/api/notes/${monthKey}`, {
+    await authFetch(`${import.meta.env.BASE_URL}api/notes/${monthKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -743,7 +866,7 @@ export async function fetchEmployeeSchedule(
   monthKey: string
 ): Promise<{ schedule: EmployeeMonthSchedule; isOffline: boolean }> {
   try {
-    const res = await fetch(`/api/schedules/${monthKey}`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/schedules/${monthKey}`, {
       headers: getStoreHeaders(),
     });
     if (res.ok) {
@@ -796,7 +919,7 @@ export async function fetchTeamPlanning(
   let dbSchedules: Record<string, EmployeeMonthSchedule> | null = null;
 
   try {
-    const res = await fetch(`/api/schedules/${monthKey}`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/schedules/${monthKey}`, {
       headers: getStoreHeaders(),
     });
     if (res.ok) {
@@ -811,7 +934,7 @@ export async function fetchTeamPlanning(
 
   // Also fetch latest day notes
   try {
-    const notesRes = await fetch(`/api/notes/${monthKey}`, {
+    const notesRes = await authFetch(`${import.meta.env.BASE_URL}api/notes/${monthKey}`, {
       headers: getStoreHeaders(),
     });
     if (notesRes.ok) {
@@ -857,7 +980,7 @@ export async function fetchTeamPlanning(
 
 export async function fetchAllSchedules(): Promise<Record<string, Record<string, EmployeeMonthSchedule>> | null> {
   try {
-    const res = await fetch('/api/schedules', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/schedules`, {
       headers: getStoreHeaders(),
     });
     if (res.ok) {
@@ -891,7 +1014,7 @@ export async function updateShiftInSheet(
   info?: string
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const res = await fetch(`/api/schedules/${monthKey}/shift`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/schedules/${monthKey}/shift`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -942,7 +1065,7 @@ export async function saveLocalTeamPlanning(
   updatedEmployees?: Employee[]
 ): Promise<void> {
   try {
-    await fetch(`/api/schedules/${monthKey}`, {
+    await authFetch(`${import.meta.env.BASE_URL}api/schedules/${monthKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -968,7 +1091,7 @@ export async function saveLocalTeamPlanning(
 
 export async function deleteMonthData(monthKey: string): Promise<void> {
   try {
-    await fetch(`/api/months/${monthKey}`, {
+    await authFetch(`${import.meta.env.BASE_URL}api/months/${monthKey}`, {
       method: 'DELETE',
       headers: getStoreHeaders(),
     });
@@ -986,7 +1109,7 @@ export async function deleteMonthData(monthKey: string): Promise<void> {
 // ---------------------------------------------------------------------------
 export async function fetchChanges(employeeName: string): Promise<ChangeEntry[]> {
   try {
-    const res = await fetch(`/api/changes/${encodeURIComponent(employeeName)}`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/changes/${encodeURIComponent(employeeName)}`, {
       headers: getStoreHeaders(),
     });
     if (res.ok) {
@@ -1003,7 +1126,7 @@ export async function fetchChanges(employeeName: string): Promise<ChangeEntry[]>
 
 export async function clearChanges(employeeName: string): Promise<boolean> {
   try {
-    const res = await fetch(`/api/changes/${encodeURIComponent(employeeName)}/clear`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/changes/${encodeURIComponent(employeeName)}/clear`, {
       method: 'POST',
       headers: getStoreHeaders(),
     });
@@ -1015,7 +1138,7 @@ export async function clearChanges(employeeName: string): Promise<boolean> {
 
 export async function fetchHistory(employeeName: string): Promise<HistoryEntry[]> {
   try {
-    const res = await fetch(`/api/history/${encodeURIComponent(employeeName)}`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/history/${encodeURIComponent(employeeName)}`, {
       headers: getStoreHeaders(),
     });
     if (res.ok) {
@@ -1036,7 +1159,7 @@ export async function fetchAllHistory(): Promise<{
   byEmployee: Record<string, number>;
 }> {
   try {
-    const res = await fetch('/api/history', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/history`, {
       headers: getStoreHeaders(),
     });
     if (res.ok) {
@@ -1057,7 +1180,7 @@ export async function fetchAllHistory(): Promise<{
 
 export async function deleteAllHistory(): Promise<{ success: boolean; count: number; error?: string }> {
   try {
-    const res = await fetch('/api/history', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/history`, {
       method: 'DELETE',
       headers: getStoreHeaders(),
     });
@@ -1073,7 +1196,7 @@ export async function deleteAllHistory(): Promise<{ success: boolean; count: num
 
 export async function deleteEmployeeHistory(employeeName: string): Promise<{ success: boolean; count: number; error?: string }> {
   try {
-    const res = await fetch(`/api/history/${encodeURIComponent(employeeName)}`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/history/${encodeURIComponent(employeeName)}`, {
       method: 'DELETE',
       headers: getStoreHeaders(),
     });
@@ -1162,13 +1285,14 @@ export function ensureResponsableAdmin(employeesList: Employee[]): Employee[] {
 // ---------------------------------------------------------------------------
 export async function superAdminLogin(password: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/superadmin/login', {
+    const res = await fetch(`${import.meta.env.BASE_URL}api/superadmin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password }),
     });
     const data = await res.json();
     if (res.ok && data.success) {
+      superSession = data.token || '';
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEY_SUPERADMIN_SESSION, 'authorized');
       }
@@ -1199,7 +1323,7 @@ export async function superAdminGetStores(): Promise<{
   error?: string;
 }> {
   try {
-    const res = await fetch('/api/superadmin/stores');
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/superadmin/stores`);
     const data = await res.json();
     if (res.ok && data.success) {
       return { success: true, stores: data.stores };
@@ -1216,7 +1340,7 @@ export async function superAdminCreateStore(
   adminPin?: string
 ): Promise<{ success: boolean; store?: any; error?: string }> {
   try {
-    const res = await fetch('/api/superadmin/stores', {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/superadmin/stores`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, token, adminPin }),
@@ -1236,7 +1360,7 @@ export async function superAdminUpdateStore(
   updates: { name?: string; token?: string; adminPin?: string }
 ): Promise<{ success: boolean; store?: any; error?: string }> {
   try {
-    const res = await fetch(`/api/superadmin/stores/${storeId}`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/superadmin/stores/${storeId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -1253,7 +1377,7 @@ export async function superAdminUpdateStore(
 
 export async function superAdminDeleteStore(storeId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch(`/api/superadmin/stores/${storeId}`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/superadmin/stores/${storeId}`, {
       method: 'DELETE',
     });
     const data = await res.json();
@@ -1271,7 +1395,7 @@ export async function superAdminRestoreStore(
   backupData: any
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch(`/api/superadmin/stores/${storeId}/restore`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/superadmin/stores/${storeId}/restore`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(backupData),
@@ -1288,7 +1412,7 @@ export async function superAdminRestoreStore(
 
 export async function superAdminResetStore(storeId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch(`/api/superadmin/stores/${storeId}/reset`, {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/superadmin/stores/${storeId}/reset`, {
       method: 'POST',
     });
     const data = await res.json();

@@ -34,23 +34,23 @@ export const AppLogo: React.FC<AppLogoProps> = ({
     switch (variant) {
       case 'full':
         return isDarkActive
-          ? ['/logo-full-dark.svg', '/logo.svg', '/logo-full-light.svg']
-          : ['/logo-full-light.svg', '/logo-full-dark.svg', '/logo.svg'];
+          ? [import.meta.env.BASE_URL + 'logo-full-dark.svg', import.meta.env.BASE_URL + 'logo.svg', import.meta.env.BASE_URL + 'logo-full-light.svg']
+          : [import.meta.env.BASE_URL + 'logo-full-light.svg', import.meta.env.BASE_URL + 'logo-full-dark.svg', import.meta.env.BASE_URL + 'logo.svg'];
       case 'full-dark':
-        return ['/logo-full-dark.svg', '/logo.svg'];
+        return [import.meta.env.BASE_URL + 'logo-full-dark.svg', import.meta.env.BASE_URL + 'logo.svg'];
       case 'full-light':
-        return ['/logo-full-light.svg'];
+        return [import.meta.env.BASE_URL + 'logo-full-light.svg'];
       case 'symbol':
-        return ['/logo-symbol.svg', '/logo-symbol-transparent.svg', '/logo-symbol-square.svg', '/icon.svg'];
+        return [import.meta.env.BASE_URL + 'logo-symbol.svg', import.meta.env.BASE_URL + 'logo-symbol-transparent.svg', import.meta.env.BASE_URL + 'logo-symbol-square.svg', import.meta.env.BASE_URL + 'icon.svg'];
       case 'transparent':
-        return ['/logo-symbol-transparent.svg', '/logo-symbol.svg'];
+        return [import.meta.env.BASE_URL + 'logo-symbol-transparent.svg', import.meta.env.BASE_URL + 'logo-symbol.svg'];
       case 'mono-white':
-        return ['/logo-symbol-mono-white.svg', '/logo-symbol.svg'];
+        return [import.meta.env.BASE_URL + 'logo-symbol-mono-white.svg', import.meta.env.BASE_URL + 'logo-symbol.svg'];
       case 'mono-dark':
-        return ['/logo-symbol-mono-dark.svg', '/logo-symbol.svg'];
+        return [import.meta.env.BASE_URL + 'logo-symbol-mono-dark.svg', import.meta.env.BASE_URL + 'logo-symbol.svg'];
       case 'square':
       default:
-        return ['/logo-symbol-square.svg', '/icon.svg', '/icon-192.png', '/logo.svg'];
+        return [import.meta.env.BASE_URL + 'logo-symbol-square.svg', import.meta.env.BASE_URL + 'icon.svg', import.meta.env.BASE_URL + 'icon-192.png', import.meta.env.BASE_URL + 'logo.svg'];
     }
   };
 

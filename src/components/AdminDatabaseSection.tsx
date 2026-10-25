@@ -1,3 +1,4 @@
+import { authFetch } from '../services/api';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Employee,
@@ -71,7 +72,7 @@ export const AdminDatabaseSection: React.FC<AdminDatabaseSectionProps> = ({
   const handleExportBackup = async () => {
     setIsExporting(true);
     try {
-      const res = await fetch('/api/backup');
+      const res = await authFetch(`${import.meta.env.BASE_URL}api/backup`);
       if (!res.ok) throw new Error('Erreur lors de la génération de la sauvegarde');
       const data = await res.json();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -104,7 +105,7 @@ export const AdminDatabaseSection: React.FC<AdminDatabaseSectionProps> = ({
         throw new Error('Format de fichier de sauvegarde invalide.');
       }
 
-      const res = await fetch('/api/backup', {
+      const res = await authFetch(`${import.meta.env.BASE_URL}api/backup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed),

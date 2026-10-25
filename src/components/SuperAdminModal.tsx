@@ -1,3 +1,4 @@
+import { downloadAuthed } from '../services/api';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   superAdminLogin,
@@ -384,8 +385,11 @@ export const SuperAdminModal: React.FC<SuperAdminModalProps> = ({
               </button>
 
               <a
-                href="/api/superadmin/backup-all"
-                download
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  downloadAuthed('api/superadmin/backup-all', `reseau_complet_backup_${Date.now()}.json`);
+                }}
                 className="py-2 px-3 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors flex items-center gap-1.5 border border-slate-700"
                 title="Sauvegarde globale de tout le réseau"
               >
@@ -565,8 +569,11 @@ export const SuperAdminModal: React.FC<SuperAdminModalProps> = ({
 
                       <div className="flex items-center gap-1.5">
                         <a
-                          href={`/api/superadmin/stores/${s.id}/backup`}
-                          download
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            downloadAuthed(`api/superadmin/stores/${s.id}/backup`, `sauvegarde_${s.id}_${Date.now()}.json`);
+                          }}
                           className="py-1.5 px-2.5 rounded-lg text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-colors flex items-center gap-1"
                           title="Télécharger la sauvegarde complète de ce magasin"
                         >

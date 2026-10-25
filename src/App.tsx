@@ -30,6 +30,8 @@ import {
   ensureResponsableAdmin,
   getStoreName,
   saveStoreName,
+  verifyApiTokenWithStore,
+  clearAdminSession,
 } from './services/api';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
@@ -262,6 +264,21 @@ export default function App() {
   }, [isTokenValidated]);
 
   // Handle successful token validation
+  useEffect(() => {
+    const onAuthLost = () => {
+      localStorage.removeItem(STORAGE_KEY_TOKEN_VALIDATED);
+      setIsTokenValidated(false);
+      setTokenRevokedMessage("La clé d'accès a été modifiée par l'administrateur. Veuillez saisir la nouvelle clé.");
+    };
+    const onAdminExpired = () => setIsAdminActive(false);
+    window.addEventListener('canoshift:auth-lost', onAuthLost);
+    window.addEventListener('canoshift:admin-expired', onAdminExpired);
+    return () => {
+      window.removeEventListener('canoshift:auth-lost', onAuthLost);
+      window.removeEventListener('canoshift:admin-expired', onAdminExpired);
+    };
+  }, []);
+
   const handleTokenSuccess = (token: string, store?: { id: string; name: string; token: string }) => {
     localStorage.setItem(STORAGE_KEY_TOKEN_VALIDATED, 'true');
     setTokenRevokedMessage('');
@@ -439,13 +456,15 @@ export default function App() {
         }
       } else if (msg.type === 'TOKEN_CHANGED') {
         const savedToken = (localStorage.getItem('planning_api_token') || '').trim().toUpperCase();
-        const newToken = (msg.newToken || '').trim().toUpperCase();
-        if (savedToken !== newToken) {
-          localStorage.removeItem(STORAGE_KEY_TOKEN_VALIDATED);
-          setIsTokenValidated(false);
-          setTokenRevokedMessage("La clé d'accès a été modifiée par l'administrateur. Veuillez saisir la nouvelle clé.");
-        }
+        verifyApiTokenWithStore(savedToken).then((result) => {
+          if (!result.valid) {
+            localStorage.removeItem(STORAGE_KEY_TOKEN_VALIDATED);
+            setIsTokenValidated(false);
+            setTokenRevokedMessage("La clé d'accès a été modifiée par l'administrateur. Veuillez saisir la nouvelle clé.");
+          }
+        });
       } else if (msg.type === 'PIN_CHANGED') {
+        clearAdminSession();
         setIsAdminActive(false);
       } else if (msg.type === 'CONFIG_UPDATED') {
         if (msg.config) {

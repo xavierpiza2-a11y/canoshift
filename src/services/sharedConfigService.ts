@@ -1,3 +1,4 @@
+import { authFetch } from './api';
 export interface ServerStatusResponse {
   status: string;
   connectedClients: number;
@@ -18,7 +19,7 @@ export interface ServerStatusResponse {
  */
 export async function checkServerHealth(): Promise<ServerStatusResponse | null> {
   try {
-    const res = await fetch('/api/health', { cache: 'no-cache' });
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/health`, { cache: 'no-cache' });
     if (res.ok) {
       return await res.json();
     }

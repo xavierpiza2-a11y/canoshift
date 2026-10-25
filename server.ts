@@ -34,6 +34,15 @@ import {
   dbRestoreBackup,
   dbGetAllStoresBackup,
 } from './src/server/db.ts';
+import {
+  createSession,
+  getSession,
+  revokeStoreSessions,
+  revokeAllForStore,
+  safeEqual,
+  FailureLimiter,
+  publicConfig,
+} from './src/server/auth.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,29 +50,116 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+app.disable('x-powered-by');
+// Caddy tourne sur la même machine : on fait confiance à X-Forwarded-For venant des réseaux locaux/privés
+app.set('trust proxy', 'loopback, uniquelocal');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
+// Petit parseur pour les routes publiques ; le gros parseur (15 Mo) n'est monté qu'APRÈS authentification
+app.use(['/api/verify-token', '/api/verify-pin', '/api/superadmin/login'], express.json({ limit: '4kb' }));
+const bigJson = express.json({ limit: '15mb' });
+
+// ---------------------------------------------------------------------------
+// AUTHENTIFICATION : sessions magasin / admin (PIN) / super-admin
+// ---------------------------------------------------------------------------
+function bearer(req: express.Request): string | undefined {
+  const h = req.headers.authorization;
+  if (typeof h === 'string' && h.startsWith('Bearer ')) return h.slice(7).trim();
+  return undefined;
+}
+
+function requireStore(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const s = getSession(bearer(req), 'store');
+  if (!s?.storeId) {
+    return res.status(401).json({ success: false, error: 'Authentification requise', code: 'AUTH_REQUIRED' });
+  }
+  const hdr = req.headers['x-store-id'];
+  if (typeof hdr === 'string' && hdr.trim() && hdr.trim() !== s.storeId) {
+    return res.status(403).json({ success: false, error: 'Magasin non autorisé', code: 'STORE_MISMATCH' });
+  }
+  (req as any).auth = { storeId: s.storeId };
+  next();
+}
+
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const a = getSession(req.headers['x-admin-session'], 'admin');
+  if (!a || a.storeId !== (req as any).auth?.storeId) {
+    return res.status(403).json({ success: false, error: 'Droits administrateur requis', code: 'ADMIN_REQUIRED' });
+  }
+  next();
+}
+
+function requireSuper(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!getSession(req.headers['x-superadmin-token'], 'super')) {
+    return res.status(401).json({ success: false, error: 'Authentification gestionnaire requise', code: 'SUPER_REQUIRED' });
+  }
+  next();
+}
+
+// Limitation des tentatives (échecs) : clé = IP (+ magasin pour le PIN)
+const tokenLimiter = new FailureLimiter(10, 15 * 60 * 1000, 15 * 60 * 1000);
+const pinLimiter = new FailureLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
+const superLimiter = new FailureLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
+
+function tooMany(res: express.Response, seconds: number) {
+  res.setHeader('Retry-After', String(seconds));
+  return res.status(429).json({
+    success: false,
+    error: `Trop de tentatives. Réessayez dans ${Math.ceil(seconds / 60)} min.`,
+    retryAfter: seconds,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // WEBSOCKET REAL-TIME BROADCAST ENGINE
 // ---------------------------------------------------------------------------
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  maxPayload: 64 * 1024,
+  verifyClient: (info: any, cb: (ok: boolean, code?: number, msg?: string) => void) => {
+    try {
+      const url = new URL(info.req.url || '', 'http://localhost');
+      const store = getSession(url.searchParams.get('session'), 'store');
+      const isSuper = Boolean(getSession(url.searchParams.get('sa'), 'super'));
+      if (!store?.storeId && !isSuper) return cb(false, 401, 'Unauthorized');
+      info.req.wsAuth = { storeId: store?.storeId, isSuper };
+      cb(true);
+    } catch {
+      cb(false, 400, 'Bad Request');
+    }
+  },
+} as any);
 
 interface ClientInfo {
   ws: WebSocket;
   isAlive: boolean;
   ip: string;
+  storeId?: string;
+  isSuper: boolean;
 }
 
 const clients = new Set<ClientInfo>();
 
-function broadcast(event: { type: string; storeId?: string; entity?: string; [key: string]: any }) {
+function broadcast(event: { type: string; storeId?: string; entity?: string; superOnly?: boolean; [key: string]: any }) {
+  const { superOnly, newPin: _p, newToken: _t, ...clean } = event;
+  const safe: Record<string, any> = { ...clean };
+  if (safe.config) safe.config = publicConfig(safe.config);
   const message = JSON.stringify({
-    ...event,
+    ...safe,
     _broadcastTimestamp: Date.now(),
   });
 
   for (const client of clients) {
+    // Un client ne reçoit que les événements de SON magasin ; les événements
+    // de gestion (création/modification de magasins) sont réservés au super-admin.
+    const allowed =
+      client.isSuper || (!superOnly && event.storeId !== undefined && event.storeId === client.storeId);
+    if (!allowed) continue;
     if (client.ws.readyState === WebSocket.OPEN) {
       try {
         client.ws.send(message);
@@ -79,15 +175,16 @@ wss.on('connection', (ws, req) => {
     ws,
     isAlive: true,
     ip: req.socket.remoteAddress || 'unknown',
+    storeId: (req as any).wsAuth?.storeId,
+    isSuper: Boolean((req as any).wsAuth?.isSuper),
   };
   clients.add(client);
 
-  // Send initial welcome & status
+  // Send initial welcome (aucune information d'infrastructure)
   ws.send(
     JSON.stringify({
       type: 'INIT_CONNECTED',
       serverTime: Date.now(),
-      dbStatus: getDatabaseStatus(),
     })
   );
 
@@ -132,19 +229,19 @@ wss.on('close', () => {
   clearInterval(pingInterval);
 });
 
-// Helper to resolve current store from request headers, query, or body
+function dropStoreSockets(storeId: string, delayMs = 500) {
+  setTimeout(() => {
+    for (const c of clients) {
+      if (c.storeId === storeId && !c.isSuper) {
+        try { c.ws.close(4401, 'session revoked'); } catch { /* ignore */ }
+      }
+    }
+  }, delayMs);
+}
+
+// Magasin résolu par l'authentification (jamais par un simple en-tête client)
 function resolveStoreId(req: express.Request): string {
-  const fromHeader = req.headers['x-store-id'];
-  if (typeof fromHeader === 'string' && fromHeader.trim()) return fromHeader.trim();
-
-  const fromQuery = req.query.storeId;
-  if (typeof fromQuery === 'string' && fromQuery.trim()) return fromQuery.trim();
-
-  const fromBody = req.body?.storeId;
-  if (typeof fromBody === 'string' && fromBody.trim()) return fromBody.trim();
-
-  const fallback = dbGetStoreById();
-  return fallback?.id || 'store_main';
+  return (req as any).auth?.storeId as string;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,11 +250,16 @@ function resolveStoreId(req: express.Request): string {
 
 // Health & Status
 app.get('/api/health', (req, res) => {
-  const storeId = resolveStoreId(req);
+  const store = getSession(bearer(req), 'store');
+  if (!store?.storeId) {
+    return res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  }
+  let connected = 0;
+  for (const c of clients) if (c.storeId === store.storeId) connected++;
   res.json({
     status: 'ok',
-    connectedClients: clients.size,
-    db: getDatabaseStatus(storeId),
+    connectedClients: connected,
+    db: getDatabaseStatus(store.storeId),
     timestamp: new Date().toISOString(),
   });
 });
@@ -171,11 +273,17 @@ app.post('/api/verify-token', async (req, res) => {
       return res.json({ success: true, valid: false });
     }
 
+    const limitKey = req.ip || 'unknown';
+    const wait = tokenLimiter.check(limitKey);
+    if (wait) return tooMany(res, wait);
+
     const matchedStore = dbGetStoreByToken(entered);
     if (matchedStore) {
+      tokenLimiter.success(limitKey);
       res.json({
         success: true,
         valid: true,
+        session: createSession('store', matchedStore.id),
         store: {
           id: matchedStore.id,
           name: matchedStore.name,
@@ -183,6 +291,7 @@ app.post('/api/verify-token', async (req, res) => {
         },
       });
     } else {
+      tokenLimiter.fail(limitKey);
       res.json({ success: true, valid: false });
     }
   } catch (err: any) {
@@ -191,15 +300,25 @@ app.post('/api/verify-token', async (req, res) => {
 });
 
 // Store Admin PIN verification (per-store)
-app.post('/api/verify-pin', async (req, res) => {
+app.post('/api/verify-pin', requireStore, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
+    const limitKey = `${req.ip || 'unknown'}|${storeId}`;
+    const wait = pinLimiter.check(limitKey);
+    if (wait) return tooMany(res, wait);
+
     const store = dbGetStoreById(storeId);
     const { pin } = req.body;
     const serverPin = (store?.adminPin || '000000').trim();
-    const entered = (pin || '').trim();
-    const isValid = entered.length === 6 && entered === serverPin;
-    res.json({ success: true, valid: isValid });
+    const entered = String(pin || '').trim();
+    const isValid = entered.length === 6 && safeEqual(entered, serverPin);
+    if (isValid) {
+      pinLimiter.success(limitKey);
+      res.json({ success: true, valid: true, adminSession: createSession('admin', storeId) });
+    } else {
+      pinLimiter.fail(limitKey);
+      res.json({ success: true, valid: false });
+    }
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -223,15 +342,24 @@ app.post('/api/superadmin/login', (req, res) => {
       });
     }
 
-    if (entered && entered === masterPassword) {
-      res.json({ success: true, token: 'superadmin_authorized' });
+    const limitKey = req.ip || 'unknown';
+    const wait = superLimiter.check(limitKey);
+    if (wait) return tooMany(res, wait);
+
+    if (entered && safeEqual(entered, masterPassword)) {
+      superLimiter.success(limitKey);
+      res.json({ success: true, token: createSession('super') });
     } else {
+      superLimiter.fail(limitKey);
       res.status(401).json({ success: false, error: 'Mot de passe gestionnaire incorrect.' });
     }
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// Toutes les routes super-admin suivantes exigent une session gestionnaire
+app.use('/api/superadmin', requireSuper, bigJson);
 
 // List all stores with metadata and statistics
 app.get('/api/superadmin/stores', (req, res) => {
@@ -253,6 +381,7 @@ app.post('/api/superadmin/stores', async (req, res) => {
     const newStore = await dbCreateStore(name, token, adminPin);
     broadcast({
       type: 'STORE_CREATED',
+      superOnly: true,
       store: newStore,
     });
     res.json({ success: true, store: newStore });
@@ -266,28 +395,28 @@ app.put('/api/superadmin/stores/:storeId', async (req, res) => {
   try {
     const { storeId } = req.params;
     const { name, token, adminPin } = req.body;
+    const beforeStore = dbGetStoreById(storeId);
+    const prevToken = beforeStore?.token;
+    const prevPin = beforeStore?.adminPin;
     const updatedStore = await dbUpdateStore(storeId, { name, token, adminPin });
 
     broadcast({
       type: 'STORE_UPDATED',
+      superOnly: true,
       storeId,
       store: updatedStore,
     });
 
-    if (token) {
-      broadcast({
-        type: 'TOKEN_CHANGED',
-        storeId,
-        newToken: token.trim().toUpperCase(),
-      });
+    // Seuls les VRAIS changements révoquent les sessions
+    if (token && token.trim().toUpperCase() !== prevToken) {
+      broadcast({ type: 'TOKEN_CHANGED', storeId });
+      revokeStoreSessions(storeId, 'store');
+      dropStoreSockets(storeId);
     }
 
-    if (adminPin) {
-      broadcast({
-        type: 'PIN_CHANGED',
-        storeId,
-        newPin: adminPin.trim(),
-      });
+    if (adminPin && adminPin.trim() !== prevPin) {
+      broadcast({ type: 'PIN_CHANGED', storeId });
+      revokeStoreSessions(storeId, 'admin');
     }
 
     res.json({ success: true, store: updatedStore });
@@ -303,8 +432,11 @@ app.delete('/api/superadmin/stores/:storeId', async (req, res) => {
     await dbDeleteStore(storeId);
     broadcast({
       type: 'STORE_DELETED',
+      superOnly: true,
       storeId,
     });
+    revokeAllForStore(storeId);
+    dropStoreSockets(storeId, 0);
     res.json({ success: true, storeId });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message });
@@ -338,7 +470,7 @@ app.post('/api/superadmin/stores/:storeId/restore', async (req, res) => {
       storeId,
       config: updatedConfig,
     });
-    res.json({ success: true, message: 'Sauvegarde restaurée avec succès', config: updatedConfig });
+    res.json({ success: true, message: 'Sauvegarde restaurée avec succès', config: publicConfig(updatedConfig) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -354,7 +486,7 @@ app.post('/api/superadmin/stores/:storeId/reset', async (req, res) => {
       storeId,
       config: newConfig,
     });
-    res.json({ success: true, config: newConfig });
+    res.json({ success: true, config: publicConfig(newConfig) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -374,23 +506,27 @@ app.get('/api/superadmin/backup-all', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// STORE-SCOPED STANDARD REST API ROUTES
+// STORE-SCOPED STANDARD REST API ROUTES (session magasin obligatoire)
 // ---------------------------------------------------------------------------
+app.use('/api', requireStore, bigJson);
 
 // 1. Config
 app.get('/api/config', async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const config = await dbGetConfig(storeId);
-    res.json({ success: true, storeId, config });
+    res.json({ success: true, storeId, config: publicConfig(config) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.post('/api/config', async (req, res) => {
+app.post('/api/config', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
+    const beforeStore = dbGetStoreById(storeId);
+    const prevToken = beforeStore?.token;
+    const prevPin = beforeStore?.adminPin;
     const updated = await dbSaveConfig(storeId, req.body);
     broadcast({
       type: 'CONFIG_UPDATED',
@@ -398,15 +534,18 @@ app.post('/api/config', async (req, res) => {
       config: updated,
     });
 
-    if (req.body.adminPin) {
-      broadcast({
-        type: 'PIN_CHANGED',
-        storeId,
-        newPin: req.body.adminPin.trim(),
-      });
+    if (typeof req.body.apiToken === 'string' && req.body.apiToken.trim().toUpperCase() !== prevToken) {
+      broadcast({ type: 'TOKEN_CHANGED', storeId });
+      revokeStoreSessions(storeId, 'store');
+      dropStoreSockets(storeId);
     }
 
-    res.json({ success: true, storeId, config: updated });
+    if (typeof req.body.adminPin === 'string' && req.body.adminPin.trim() && req.body.adminPin.trim() !== prevPin) {
+      broadcast({ type: 'PIN_CHANGED', storeId });
+      revokeStoreSessions(storeId, 'admin');
+    }
+
+    res.json({ success: true, storeId, config: publicConfig(updated) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -435,7 +574,7 @@ app.get('/api/schedules/:monthKey', async (req, res) => {
   }
 });
 
-app.post('/api/schedules/:monthKey', async (req, res) => {
+app.post('/api/schedules/:monthKey', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const { monthKey } = req.params;
@@ -454,7 +593,7 @@ app.post('/api/schedules/:monthKey', async (req, res) => {
 });
 
 // 3. Shift Update (Atomic shift modification)
-app.post('/api/schedules/:monthKey/shift', async (req, res) => {
+app.post('/api/schedules/:monthKey/shift', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const { monthKey } = req.params;
@@ -494,7 +633,7 @@ app.get('/api/notes/:monthKey', async (req, res) => {
   }
 });
 
-app.post('/api/notes/:monthKey', async (req, res) => {
+app.post('/api/notes/:monthKey', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const { monthKey } = req.params;
@@ -513,7 +652,7 @@ app.post('/api/notes/:monthKey', async (req, res) => {
 });
 
 // 5. Delete Month
-app.delete('/api/months/:monthKey', async (req, res) => {
+app.delete('/api/months/:monthKey', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const { monthKey } = req.params;
@@ -586,7 +725,7 @@ app.get('/api/history/:employeeName', async (req, res) => {
 });
 
 // Supprimer tout l'historique de modification du magasin
-app.delete('/api/history', async (req, res) => {
+app.delete('/api/history', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const deletedCount = await dbClearAllHistory(storeId);
@@ -607,7 +746,7 @@ app.delete('/api/history', async (req, res) => {
 });
 
 // Supprimer l'historique de modification d'un salarié spécifique
-app.delete('/api/history/:employeeName', async (req, res) => {
+app.delete('/api/history/:employeeName', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const { employeeName } = req.params;
@@ -631,7 +770,7 @@ app.delete('/api/history/:employeeName', async (req, res) => {
 });
 
 // 8. Reset / Blank Slate (Scoped)
-app.post('/api/reset', async (req, res) => {
+app.post('/api/reset', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const newConfig = await dbResetToCleanStore(storeId);
@@ -640,14 +779,14 @@ app.post('/api/reset', async (req, res) => {
       storeId,
       config: newConfig,
     });
-    res.json({ success: true, storeId, config: newConfig });
+    res.json({ success: true, storeId, config: publicConfig(newConfig) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // 9. Full Backup Export & Import (Scoped)
-app.get('/api/backup', async (req, res) => {
+app.get('/api/backup', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const store = dbGetStoreById(storeId);
@@ -661,7 +800,7 @@ app.get('/api/backup', async (req, res) => {
   }
 });
 
-app.post('/api/backup', async (req, res) => {
+app.post('/api/backup', requireAdmin, async (req, res) => {
   try {
     const storeId = resolveStoreId(req);
     const updatedConfig = await dbRestoreBackup(storeId, req.body);
@@ -670,10 +809,17 @@ app.post('/api/backup', async (req, res) => {
       storeId,
       config: updatedConfig,
     });
-    res.json({ success: true, storeId, message: 'Sauvegarde restaurée avec succès', config: updatedConfig });
+    res.json({ success: true, storeId, message: 'Sauvegarde restaurée avec succès', config: publicConfig(updatedConfig) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// Erreurs de parsing / taille : réponse JSON propre, sans détail interne
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!err) return next();
+  const status = err.status === 413 ? 413 : err.status === 400 ? 400 : 500;
+  res.status(status).json({ success: false, error: status === 413 ? 'Requête trop volumineuse' : 'Requête invalide' });
 });
 
 // ---------------------------------------------------------------------------

@@ -50,7 +50,9 @@ export const TokenGate: React.FC<TokenGateProps> = ({ storeName, infoMessage, on
     }
   };
 
-  const handleSwitchToStoreFromSuperAdmin = (store: { id: string; name: string; token: string }) => {
+  const handleSwitchToStoreFromSuperAdmin = async (store: { id: string; name: string; token: string }) => {
+    // Ouvre une vraie session magasin avec la clé de ce magasin
+    await verifyApiTokenWithStore(store.token);
     setActiveStore(store);
     setApiToken(store.token);
     onTokenSuccess(store.token, store);
