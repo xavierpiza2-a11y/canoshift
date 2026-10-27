@@ -10,6 +10,8 @@ export interface Employee {
   weeklyHoursQuota?: number; // Quota hebdomadaire pour les 35h (défaut: 35)
   yearlyHoursQuota?: number; // Quota annuel pour les annualisés (défaut: 1607)
   forfaitDaysQuota?: number; // Quota annuel de jours pour forfait jour (défaut: 218)
+  exerciseInitials?: Record<string, { hoursBalance?: number; leaveTaken?: number; rttTaken?: number }>; // Soldes initiaux PAR exercice (clé = année de début, ex. "2027")
+  initialsExerciseYear?: number; // Exercice auquel s'appliquent les valeurs historiques ci-dessous
   initialHoursBalance?: number; // Report d'heures N-1 au 1er juin (ex: +4h ou -2h, défaut: 0)
   paidLeaveTotal?: number; // Total de congés payés acquis sur l'exercice (défaut: 25)
   paidLeaveTaken?: number; // Congés payés déjà pris initialement au 1er juin (défaut: 0)
@@ -25,9 +27,12 @@ export interface ShiftCategoryItem {
   badgeBg?: string;
   badgeText?: string;
   badgeBorder?: string;
+  locked?: boolean; // Catégorie de base : non modifiable, non supprimable
 }
 
 export type ShiftCategory =
+  | 'BASE'
+  | 'CFA'
   | 'MATIN'
   | 'SOIR'
   | 'JOURNEE'
@@ -108,5 +113,6 @@ export interface Tableau2ShiftOption {
   description?: string;
   hoursDecimal?: number;
   dayStatus?: 'PRESENT' | 'REPOS' | 'ABSENT'; // Status in Team Day view: Présent, Repos, Absent
+  locked?: boolean; // Créneau de base : non modifiable, non supprimable
 }
 

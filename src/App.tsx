@@ -454,6 +454,12 @@ export default function App() {
             setMySchedule(msg.teamSchedules[currentEmployee.name]);
           }
         }
+      } else if (msg.type === 'SCHEDULES_GENERATED') {
+        // Journées générées par le serveur (nouveau salarié / mois / exercice) : on recharge le mois affiché
+        if (Array.isArray(msg.months) && msg.months.includes(selectedMonth)) {
+          loadTeamSchedule(selectedMonth, employees);
+          if (currentEmployee) loadMySchedule(currentEmployee.name, selectedMonth);
+        }
       } else if (msg.type === 'TOKEN_CHANGED') {
         const savedToken = (localStorage.getItem('planning_api_token') || '').trim().toUpperCase();
         verifyApiTokenWithStore(savedToken).then((result) => {
@@ -766,8 +772,7 @@ export default function App() {
             onUpdateVisibleMonths={handleUpdateVisibleMonths}
             onUpdateAllMonths={handleUpdateAllMonths}
             onSwitchToProfile={handleSelectEmployee}
-            onShiftUpdated={handleShiftUpdated}
-            onPlanningImported={handlePlanningImported}
+                        onPlanningImported={handlePlanningImported}
             onUpdateStoreName={handleUpdateStoreName}
             onBackToPlanning={() => setActiveTab('my-planning')}
           />

@@ -37,9 +37,13 @@ COPY server.ts ./
 COPY src/server ./src/server
 COPY src/config ./src/config
 COPY src/types ./src/types
+COPY src/shared ./src/shared
 
 # Create persistent storage directory for planning database
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && chown -R bun:bun /app/data
+
+# Le serveur tourne sans droits root
+USER bun
 
 EXPOSE 3000
 

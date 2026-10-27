@@ -1,0 +1,1042 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 2a5b689..8aeb517 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -772,8 +772,7 @@ export default function App() {
+             onUpdateVisibleMonths={handleUpdateVisibleMonths}
+             onUpdateAllMonths={handleUpdateAllMonths}
+             onSwitchToProfile={handleSelectEmployee}
+-            onShiftUpdated={handleShiftUpdated}
+-            onPlanningImported={handlePlanningImported}
++                        onPlanningImported={handlePlanningImported}
+             onUpdateStoreName={handleUpdateStoreName}
+             onBackToPlanning={() => setActiveTab('my-planning')}
+           />
+diff --git a/src/components/AdminExcelSection.tsx b/src/components/AdminExcelSection.tsx
+index 43f9943..09c4e88 100644
+--- a/src/components/AdminExcelSection.tsx
++++ b/src/components/AdminExcelSection.tsx
+@@ -11,7 +11,8 @@ import {
+   parsePlanningFromXLSX,
+   ParsedExcelPlanning,
+ } from '../services/excelService';
+-import { saveLocalTeamPlanning, getStoredDayNotes, saveStoredDayNotes, getStoreName } from '../services/api';
++import { saveLocalTeamPlanning, getStoredDayNotes, saveStoredDayNotes, getStoreName, fetchTeamPlanning } from '../services/api';
++import { exportTeamPlanningToPDF } from '../services/pdfExport';
+ import { broadcastSync } from '../services/syncBroadcast';
+ import {
+   FileSpreadsheet,
+@@ -27,6 +28,7 @@ import {
+   Info,
+   ArrowRight,
+   RefreshCw,
++  Printer,
+ } from 'lucide-react';
+ 
+ interface AdminExcelSectionProps {
+@@ -94,12 +96,15 @@ export const AdminExcelSection: React.FC<AdminExcelSectionProps> = ({
+     try {
+       const effectiveStore = (storeName || getStoreName()).trim();
+       const cleanStore = effectiveStore.replace(/[^a-zA-Z0-9]/g, '_');
++      // Le planning du MOIS CHOISI est chargé depuis le serveur (pas celui du mois affiché dans l'application),
++      // pour tous les salariés, responsable compris.
++      const { teamSchedules: monthSchedules } = await fetchTeamPlanning(targetMonth, employees);
+       const existingNotes = getStoredDayNotes(targetMonth);
+       const data = await generatePlanningTemplateXLSX(
+         targetMonth,
+         employees,
+         tableau2Options,
+-        teamSchedules,
++        monthSchedules,
+         existingNotes,
+         effectiveStore
+       );
+@@ -113,6 +118,26 @@ export const AdminExcelSection: React.FC<AdminExcelSectionProps> = ({
+     }
+   };
+ 
++  // Impression PDF du planning du mois choisi (tous les salariés)
++  const [isExportingPdf, setIsExportingPdf] = useState(false);
++  const handleDownloadPDF = async () => {
++    setIsExportingPdf(true);
++    try {
++      const { teamSchedules: monthSchedules } = await fetchTeamPlanning(targetMonth, employees);
++      const monthObj = allMonths.find((m) => m.key === targetMonth);
++      await exportTeamPlanningToPDF({
++        monthKey: targetMonth,
++        monthLabel: monthObj?.label || targetMonth,
++        employees,
++        teamSchedules: monthSchedules,
++      });
++    } catch (err: any) {
++      setImportStatus({ type: 'error', text: `Erreur lors de l'export PDF : ${err.message}` });
++    } finally {
++      setIsExportingPdf(false);
++    }
++  };
++
+   // Parse uploaded file
+   const handleProcessFile = async (file: File) => {
+     if (!file) return;
+@@ -325,7 +350,17 @@ export const AdminExcelSection: React.FC<AdminExcelSectionProps> = ({
+               className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs border border-slate-200 transition-colors"
+             >
+               <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+-              Exporter le planning actuel avec les heures (.xlsx)
++              Exporter le planning du mois avec les heures (.xlsx)
++            </button>
++
++            <button
++              type="button"
++              onClick={handleDownloadPDF}
++              disabled={isExportingPdf}
++              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-semibold transition-colors disabled:opacity-60"
++            >
++              <Printer className="w-4 h-4 text-emerald-700" />
++              {isExportingPdf ? 'Génération…' : 'Imprimer le planning du mois (PDF)'}
+             </button>
+           </div>
+         </div>
+diff --git a/src/components/AdminTableau2Section.tsx b/src/components/AdminTableau2Section.tsx
+index efd65c5..3ba2ee2 100644
+--- a/src/components/AdminTableau2Section.tsx
++++ b/src/components/AdminTableau2Section.tsx
+@@ -590,15 +590,14 @@ export const AdminTableau2Section: React.FC<AdminTableau2SectionProps> = ({
+ 
+                 {/* Right: Reorder & Edit/Delete Buttons */}
+                 <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
+-                  {opt.locked ? (
++                  {opt.locked && (
+                     <span
+-                      className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold border border-slate-200"
+-                      title="Catégorie de base : non modifiable et non supprimable"
++                      className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold border border-slate-200 mr-1"
++                      title="Catégorie de base : non modifiable et non supprimable (l'ordre reste modifiable)"
+                     >
+                       🔒 Verrouillé
+                     </span>
+-                  ) : (
+-                  <>
++                  )}
+                   <button
+                     type="button"
+                     onClick={() => handleMoveToTop(globalIndex)}
+@@ -629,6 +628,8 @@ export const AdminTableau2Section: React.FC<AdminTableau2SectionProps> = ({
+                     <ChevronDown className="w-4 h-4" />
+                   </button>
+ 
++                  {!opt.locked && (
++                  <>
+                   <div className="w-px h-4 bg-slate-200 mx-1" />
+ 
+                   <button
+diff --git a/src/components/AdminView.tsx b/src/components/AdminView.tsx
+index 288be2d..01aa23c 100644
+--- a/src/components/AdminView.tsx
++++ b/src/components/AdminView.tsx
+@@ -28,7 +28,6 @@ import {
+   deleteMonthData,
+   getCalendarDaysForMonth,
+   fetchAvailableShifts,
+-  updateShiftInSheet,
+   getStoredTableau2Shifts,
+   renameEmployeeData,
+   ensureResponsableAdmin,
+@@ -41,7 +40,7 @@ import {
+   deleteEmployeeHistory,
+ } from '../services/api';
+ import { exportTeamPlanningToPDF } from '../services/pdfExport';
+-import { calculateEmployeeBalances, simulateShiftImpact, getMonthWorkingCalendar } from '../services/hoursService';
++import { getMonthWorkingCalendar } from '../services/hoursService';
+ import { getExerciseMonthItems, getExerciseStartYear, getCurrentExerciseStartYear } from '../shared/planning';
+ import { AdminExcelSection } from './AdminExcelSection';
+ import { AdminTableau2Section } from './AdminTableau2Section';
+@@ -65,8 +64,6 @@ import {
+   ArrowDown,
+   Lock,
+   LockKeyhole,
+-  Clock,
+-  Download,
+   Edit3,
+   FileSpreadsheet,
+   Sun,
+@@ -135,7 +132,6 @@ interface AdminViewProps {
+   onUpdateVisibleMonths: (months: string[]) => void;
+   onUpdateAllMonths?: (months: MonthItem[]) => void;
+   onSwitchToProfile?: (emp: Employee) => void;
+-  onShiftUpdated?: (employeeName: string, dateKey: string, shift: string, hours: string) => void;
+   onPlanningImported?: (
+     monthKey: string,
+     teamSchedules: Record<string, any>,
+@@ -158,7 +154,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
+   onUpdateVisibleMonths,
+   onUpdateAllMonths,
+   onSwitchToProfile,
+-  onShiftUpdated,
+   onPlanningImported,
+   onBackToPlanning,
+ }) => {
+@@ -174,29 +169,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
+ 
+   // Active Admin Sub-tab: Default to Excel tab as requested
+   const [adminTab, setAdminTab] = useState<
+-    'excel' | 'shifts_reference' | 'shifts' | 'team' | 'months' | 'history' | 'connection'
++    'excel' | 'shifts_reference' | 'team' | 'months' | 'history' | 'connection'
+   >('excel');
+ 
+-  // Shifts Direct Modification State (Strictly Tableau 2 choices)
+-  const [shiftEditMonth, setShiftEditMonth] = useState<string>(
+-    visibleMonths[0] || allMonths[0]?.key || '2026-09'
+-  );
+-  const [shiftEditEmployee, setShiftEditEmployee] = useState<string>(
+-    employees[0]?.name || ''
+-  );
+-  const [shiftEditDate, setShiftEditDate] = useState<string>(
+-    () => `${visibleMonths[0] || '2026-09'}-01`
+-  );
+-  const [shiftEditOptionId, setShiftEditOptionId] = useState<string>('repos');
+   const [tableau2Options, setTableau2Options] = useState<Tableau2ShiftOption[]>(
+     getStoredTableau2Shifts
+   );
+-  const [isUpdatingShift, setIsUpdatingShift] = useState(false);
+-  const [shiftUpdateStatus, setShiftUpdateStatus] = useState<{
+-    type: 'success' | 'error';
+-    text: string;
+-  } | null>(null);
+-  const [isExportingTeamPdf, setIsExportingTeamPdf] = useState(false);
+ 
+   // Global Admin Toast notification
+   const [adminToast, setAdminToast] = useState<{
+@@ -401,12 +379,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
+     }
+   }, [isAuthenticated]);
+ 
+-  // Keep shiftEditDate in sync with month
+-  useEffect(() => {
+-    if (!shiftEditDate.startsWith(shiftEditMonth)) {
+-      setShiftEditDate(`${shiftEditMonth}-01`);
+-    }
+-  }, [shiftEditMonth]);
+ 
+   // Update default label & tab when month picker value changes
+   const handleMonthPickerChange = (val: string) => {
+@@ -899,62 +871,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
+     showToast('success', "Configuration des mois sauvegardée.");
+   };
+ 
+-  // Direct Shift Modification Handler (Tableau 2)
+-  const handleDirectShiftUpdate = async () => {
+-    const selectedOpt = tableau2Options.find((o) => o.id === shiftEditOptionId);
+-    if (!selectedOpt) {
+-      setShiftUpdateStatus({ type: 'error', text: 'Veuillez sélectionner un horaire Tableau 2.' });
+-      return;
+-    }
+-
+-    setIsUpdatingShift(true);
+-    setShiftUpdateStatus(null);
+-
+-    try {
+-      const res = await updateShiftInSheet(
+-        shiftEditMonth,
+-        shiftEditEmployee,
+-        shiftEditDate,
+-        selectedOpt.shift,
+-        selectedOpt.hours
+-      );
+-
+-      if (res.success) {
+-        setShiftUpdateStatus({
+-          type: 'success',
+-          text: `Horaire enregistré avec succès pour ${shiftEditEmployee} le ${shiftEditDate} !`,
+-        });
+-        if (onShiftUpdated) {
+-          onShiftUpdated(shiftEditEmployee, shiftEditDate, selectedOpt.shift, selectedOpt.hours);
+-        }
+-      } else {
+-        setShiftUpdateStatus({ type: 'error', text: res.message });
+-      }
+-    } catch (err: any) {
+-      setShiftUpdateStatus({ type: 'error', text: err.message || 'Erreur lors de la mise à jour.' });
+-    } finally {
+-      setIsUpdatingShift(false);
+-    }
+-  };
+-
+-  // PDF Export from Admin
+-  const handleExportPDF = async () => {
+-    setIsExportingTeamPdf(true);
+-    try {
+-      const monthObj = monthsList.find((m) => m.key === shiftEditMonth);
+-      await exportTeamPlanningToPDF({
+-        monthKey: shiftEditMonth,
+-        monthLabel: monthObj?.label || shiftEditMonth,
+-        employees,
+-        teamSchedules: teamSchedules || {},
+-      });
+-    } catch (err) {
+-      console.error(err);
+-    } finally {
+-      setIsExportingTeamPdf(false);
+-    }
+-  };
+-
+   // Check if current user has admin rights
+   const isCurrentAdmin = Boolean(
+     currentEmployee &&
+@@ -1132,7 +1048,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
+       </div>
+ 
+       {/* Admin Navigation Sub-Tabs */}
+-      <div className="grid grid-cols-3 sm:grid-cols-7 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-semibold">
++      <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-semibold">
+         <button
+           onClick={() => setAdminTab('excel')}
+           className={`py-2 px-1 rounded-lg transition-colors flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center ${
+@@ -1157,18 +1073,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
+           <span className="text-[11px] sm:text-xs">Créneaux</span>
+         </button>
+ 
+-        <button
+-          onClick={() => setAdminTab('shifts')}
+-          className={`py-2 px-1 rounded-lg transition-colors flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center ${
+-            adminTab === 'shifts'
+-              ? 'bg-white text-emerald-900 font-bold shadow-xs border-b-2 border-emerald-600'
+-              : 'text-slate-600 hover:text-slate-900'
+-          }`}
+-        >
+-          <Clock className="w-3.5 h-3.5 text-emerald-600" />
+-          <span className="text-[11px] sm:text-xs">Modifier shift</span>
+-        </button>
+-
+         <button
+           onClick={() => setAdminTab('team')}
+           className={`py-2 px-1 rounded-lg transition-colors flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center ${
+@@ -1228,7 +1132,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
+         <AdminExcelSection
+           employees={employees}
+           allMonths={monthsList}
+-          selectedMonth={shiftEditMonth || visibleMonths[0] || '2026-09'}
++          selectedMonth={visibleMonths[0] || monthsList[0]?.key || ''}
+           teamSchedules={teamSchedules || {}}
+           tableau2Options={tableau2Options}
+           onPlanningImported={(mKey, scheds, newEmps) => {
+@@ -1250,219 +1154,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
+         />
+       )}
+ 
+-      {/* SUB-TAB 0: MODIFIER HORAIRES PONCTUELS (TABLEAU 2) */}
+-      {adminTab === 'shifts' && (
+-        <div className="space-y-4">
+-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+-              <div>
+-                <div className="flex items-center gap-2">
+-                  <h3 className="text-sm font-bold text-slate-900">
+-                    Modifier un créneau horaire
+-                  </h3>
+-                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+-                    Admin
+-                  </span>
+-                </div>
+-                <p className="text-xs text-slate-500 mt-0.5">
+-                  Appliquez directement un créneau pré-configuré du Tableau 2 sur une date précise.
+-                </p>
+-              </div>
+-
+-              <button
+-                type="button"
+-                onClick={handleExportPDF}
+-                disabled={isExportingTeamPdf}
+-                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50 self-start sm:self-auto"
+-              >
+-                <Download className="w-3.5 h-3.5 text-slate-600" />
+-                <span>{isExportingTeamPdf ? 'Génération...' : 'Imprimer Planning PDF'}</span>
+-              </button>
+-            </div>
+-
+-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+-              <div>
+-                <label className="block text-xs font-bold text-slate-700 mb-1">
+-                  Mois concerné :
+-                </label>
+-                <select
+-                  value={shiftEditMonth}
+-                  onChange={(e) => setShiftEditMonth(e.target.value)}
+-                  className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white transition-all"
+-                >
+-                  {monthsList.map((m) => (
+-                    <option key={m.key} value={m.key}>
+-                      {m.label} ({m.tab})
+-                    </option>
+-                  ))}
+-                </select>
+-              </div>
+-
+-              <div>
+-                <label className="block text-xs font-bold text-slate-700 mb-1">
+-                  Salarié de l'équipe :
+-                </label>
+-                <select
+-                  value={shiftEditEmployee}
+-                  onChange={(e) => setShiftEditEmployee(e.target.value)}
+-                  className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white transition-all"
+-                >
+-                  {employees.map((emp) => (
+-                    <option key={emp.name} value={emp.name}>
+-                      {emp.name} {emp.role ? `(${emp.role})` : ''}
+-                    </option>
+-                  ))}
+-                </select>
+-              </div>
+-
+-              <div>
+-                <label className="block text-xs font-bold text-slate-700 mb-1">
+-                  Date du shift :
+-                </label>
+-                <input
+-                  type="date"
+-                  value={shiftEditDate}
+-                  onChange={(e) => setShiftEditDate(e.target.value)}
+-                  className="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white transition-all"
+-                />
+-              </div>
+-            </div>
+-
+-            {/* Choices corresponding strictly to Créneaux */}
+-            <div className="space-y-3 pt-2">
+-              <div className="flex items-center justify-between">
+-                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+-                  Sélectionnez le créneau souhaité :
+-                </span>
+-                <span className="text-[11px] text-slate-400">
+-                  {tableau2Options.length} choix configurés
+-                </span>
+-              </div>
+-
+-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
+-                {tableau2Options.map((opt) => {
+-                  const isSelected = shiftEditOptionId === opt.id;
+-                  return (
+-                    <button
+-                      key={opt.id}
+-                      type="button"
+-                      onClick={() => setShiftEditOptionId(opt.id)}
+-                      className={`p-3 rounded-xl border text-left text-xs transition-all flex items-center justify-between ${
+-                        isSelected
+-                          ? 'border-emerald-600 bg-emerald-50 text-emerald-950 font-bold shadow-xs ring-1 ring-emerald-500'
+-                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+-                      }`}
+-                    >
+-                      <div className="min-w-0 pr-1">
+-                        <p className="truncate">{opt.label}</p>
+-                        {opt.hours && (
+-                          <p className="text-[10px] text-emerald-700 font-mono mt-0.5 truncate">
+-                            {opt.hours}
+-                          </p>
+-                        )}
+-                      </div>
+-                      <div
+-                        className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${
+-                          isSelected ? 'bg-emerald-600 text-white' : 'border border-slate-300'
+-                        }`}
+-                      >
+-                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+-                      </div>
+-                    </button>
+-                  );
+-                })}
+-              </div>
+-            </div>
+-
+-            {/* Real-time RH situation pill */}
+-            {(() => {
+-              const currentDirectEmployeeObj =
+-                employees.find((e) => e.name.toLowerCase() === shiftEditEmployee.toLowerCase()) ||
+-                employees[0];
+-              if (!currentDirectEmployeeObj) return null;
+-
+-              const currentDirectBalances = calculateEmployeeBalances({
+-                employee: currentDirectEmployeeObj,
+-                selectedMonth: shiftEditMonth,
+-                targetDate: shiftEditDate,
+-              });
+-
+-              const currentDirectSelectedOpt = tableau2Options.find((o) => o.id === shiftEditOptionId);
+-              if (!currentDirectSelectedOpt) return null;
+-
+-              const directShiftImpact = simulateShiftImpact({
+-                currentBalances: currentDirectBalances,
+-                targetDate: shiftEditDate,
+-                currentShift: '',
+-                newOption: currentDirectSelectedOpt,
+-              });
+-
+-              return (
+-                <div className="p-3.5 rounded-2xl bg-linear-to-r from-slate-900 to-slate-850 text-white text-xs space-y-2 border border-slate-800 shadow-sm">
+-                  <div className="flex items-center justify-between gap-2 flex-wrap">
+-                    <div className="flex items-center gap-2">
+-                      <Scale className="w-3.5 h-3.5 text-emerald-400" />
+-                      <span className="font-bold text-white">
+-                        Impact RH : {currentDirectEmployeeObj.name}
+-                      </span>
+-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-white/10 text-emerald-300">
+-                        {currentDirectBalances.contractLabel}
+-                      </span>
+-                    </div>
+-                    <span className="text-[10px] text-slate-400 font-mono">
+-                      Exercice : {currentDirectBalances.exercise.label}
+-                    </span>
+-                  </div>
+-                  <div className="text-[11px] text-slate-200 bg-white/5 p-2 rounded-xl border border-white/5 font-medium">
+-                    {directShiftImpact.summaryText}
+-                  </div>
+-                </div>
+-              );
+-            })()}
+-
+-            {/* Status Feedback */}
+-            {shiftUpdateStatus && (
+-              <div
+-                className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+-                  shiftUpdateStatus.type === 'success'
+-                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+-                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+-                }`}
+-              >
+-                {shiftUpdateStatus.type === 'success' ? (
+-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+-                ) : (
+-                  <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+-                )}
+-                <span>{shiftUpdateStatus.text}</span>
+-              </div>
+-            )}
+-
+-            {/* Action Submit */}
+-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+-              <button
+-                type="button"
+-                onClick={handleDirectShiftUpdate}
+-                disabled={isUpdatingShift}
+-                className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 rounded-xl transition-all shadow-xs disabled:opacity-50"
+-              >
+-                {isUpdatingShift ? (
+-                  <>
+-                    <RefreshCw className="w-4 h-4 animate-spin" />
+-                    <span>Mise à jour du planning en cours...</span>
+-                  </>
+-                ) : (
+-                  <>
+-                    <Check className="w-4 h-4" />
+-                    <span>Enregistrer la modification</span>
+-                  </>
+-                )}
+-              </button>
+-            </div>
+-          </div>
+-        </div>
+-      )}
+-
+       {/* SUB-TAB 1: TEAM */}
+       {adminTab === 'team' && (
+         <div className="space-y-4">
+diff --git a/src/server/db.ts b/src/server/db.ts
+index 2dfbea6..3cfdc9f 100644
+--- a/src/server/db.ts
++++ b/src/server/db.ts
+@@ -545,7 +545,7 @@ export interface GenerationSummary {
+ 
+ /**
+  * Enregistre la config puis génère les journées manquantes pour :
+- *  - les NOUVEAUX salariés, à partir du mois courant jusqu'au dernier mois configuré ;
++ *  - les NOUVEAUX salariés, sur TOUS les mois configurés (exercice complet) ;
+  *  - les NOUVEAUX mois, pour tous les salariés.
+  * Ne remplace jamais une journée existante.
+  */
+@@ -568,10 +568,9 @@ export async function dbSaveConfigAndGenerate(
+   const touchedMonths = new Set<string>();
+   const touchedEmployees = new Set<string>();
+ 
+-  const fromMonth = currentMonthKey();
+   if (newEmployees.length > 0) {
+-    const months = allMonthKeys.filter((k) => k >= fromMonth);
+-    for (const m of months) {
++    // Exercice complet : tous les mois configurés, passés et futurs (BASE/REPOS/FERIE = heures neutres pour les soldes)
++    for (const m of allMonthKeys) {
+       const n = generateMonthDays(db, m, newEmployees);
+       if (n > 0) {
+         summary.createdDays += n;
+@@ -607,10 +606,10 @@ export async function dbEnsureSchedules(
+   const employees = (options.employeeNames?.length ? options.employeeNames : allEmployees).filter((n) =>
+     allEmployees.includes(n)
+   );
+-  const fromMonth = currentMonthKey();
++  // Par défaut : tous les mois configurés (exercice complet)
+   const months = options.monthKeys?.length
+     ? options.monthKeys.filter((k) => /^\d{4}-(0[1-9]|1[0-2])$/.test(k))
+-    : (db.config.allMonths || []).map((m) => m.key).filter((k) => k >= fromMonth);
++    : (db.config.allMonths || []).map((m) => m.key);
+ 
+   const summary: GenerationSummary = { createdDays: 0, months: [], employees: [] };
+   const touchedEmployees = new Set<string>();
+@@ -627,10 +626,6 @@ export async function dbEnsureSchedules(
+   return summary;
+ }
+ 
+-function currentMonthKey(now: Date = new Date()): string {
+-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+-}
+-
+ /**
+  * Crée les journées ABSENTES d'un mois pour les salariés donnés
+  * (férié -> FERIE, week-end -> REPOS, sinon BASE). Idempotent, synchrone (pas de doublon possible),
+diff --git a/src/services/excelService.ts b/src/services/excelService.ts
+index 3b09c0f..2922f02 100644
+--- a/src/services/excelService.ts
++++ b/src/services/excelService.ts
+@@ -231,6 +231,56 @@ export async function generatePlanningTemplateXLSX(
+   const wsCreneaux = workbook.addWorksheet('Créneaux');
+   wsCreneaux.views = [{ showGridLines: true }];
+ 
++  // ----- Préparation : libellés uniques + texte exact de chaque case -----------------------------------
++  // (une formule SUMIF additionne tous les doublons : chaque libellé ne doit apparaître qu'une fois)
++  const sheetOptions: Tableau2ShiftOption[] = [];
++  const seenLabels = new Set<string>();
++  for (const opt of tableau2Options) {
++    if (seenLabels.has(opt.label)) continue;
++    seenLabels.add(opt.label);
++    sheetOptions.push(opt);
++  }
++  const dropdownCount = sheetOptions.length;
++
++  // Créneaux réellement utilisés mais absents de la liste (horaires particuliers) : ajoutés à la fin de la
++  // feuille Créneaux, pour que le total reste exact et que rien ne soit perdu à la réimportation.
++  const extraRows: { text: string; shift: string; hours: string; dec: number }[] = [];
++  const resolveCellText = (item: { shift?: string; hours?: string }): string => {
++    const sh = (item.shift || '').trim();
++    const hr = (item.hours || '').trim();
++    if (!sh && !hr) return '';
++    const exact = sheetOptions.find((o) => o.shift === sh && (o.hours || '') === hr);
++    if (exact) return exact.label;
++    if (sh && coreShiftHours(sh) !== null) {
++      const core = sheetOptions.find((o) => o.shift === sh);
++      if (core) return core.label;
++    }
++    if (sh && !hr) {
++      const byShift = sheetOptions.find((o) => o.label === sh || o.shift === sh);
++      if (byShift) return byShift.label;
++    }
++    const text = sh && hr ? `${sh} · ${hr}` : sh || hr;
++    if (!extraRows.some((x) => x.text === text) && !seenLabels.has(text)) {
++      extraRows.push({ text, shift: sh, hours: hr, dec: calculateHours(sh || 'HORAIRE', hr, tableau2Options) });
++    }
++    return text;
++  };
++
++  const cellTexts: Record<string, Record<string, string>> = {};
++  if (existingSchedules) {
++    for (const emp of employees) {
++      const days = existingSchedules[emp.name]?.days;
++      if (!days) continue;
++      cellTexts[emp.name] = {};
++      for (const [dk, item] of Object.entries(days)) {
++        cellTexts[emp.name][dk] = resolveCellText(item as any);
++      }
++    }
++  }
++  const labelHours = new Map<string, number>();
++  sheetOptions.forEach((o) => labelHours.set(o.label, o.hoursDecimal ?? calculateHours(o.shift, o.hours, tableau2Options)));
++  extraRows.forEach((x) => labelHours.set(x.text, x.dec));
++
+   // Populate Créneaux sheet
+   const titleRowCreneaux = wsCreneaux.addRow([
+     `CRÉNEAUX & HORAIRES POSSIBLES (${effectiveStore.toUpperCase()})`,
+@@ -257,7 +307,7 @@ export async function generatePlanningTemplateXLSX(
+     fgColor: { argb: 'FFE2E8F0' },
+   };
+ 
+-  tableau2Options.forEach((opt) => {
++  sheetOptions.forEach((opt) => {
+     const hoursDec =
+       opt.hoursDecimal ?? calculateHours(opt.shift, opt.hours, tableau2Options);
+     wsCreneaux.addRow([
+@@ -269,6 +319,9 @@ export async function generatePlanningTemplateXLSX(
+       opt.description || '',
+     ]);
+   });
++  extraRows.forEach((x) => {
++    wsCreneaux.addRow([x.shift || '—', x.hours || '—', x.dec, 'PARTICULIER', x.text, 'Horaire particulier utilisé dans ce planning']);
++  });
+ 
+   wsCreneaux.getColumn(1).width = 16;
+   wsCreneaux.getColumn(2).width = 28;
+@@ -299,9 +352,11 @@ export async function generatePlanningTemplateXLSX(
+     fgColor: { argb: 'FF166534' },
+   };
+ 
+-  const creneauxRowCount = tableau2Options.length;
+-  // Formula referencing column E (Libellé Recommandé) of sheet 'Créneaux'
+-  const validationFormula = `'Créneaux'!$E$4:$E$${3 + creneauxRowCount}`;
++  // Liste déroulante : créneaux définis ; formules de total : créneaux définis + horaires particuliers
++  const validationFormula = `'Créneaux'!$E$4:$E$${3 + dropdownCount}`;
++  const lookupLast = 3 + dropdownCount + extraRows.length;
++  const labelRange = `'Créneaux'!$E$4:$E$${lookupLast}`;
++  const hoursRange = `'Créneaux'!$C$4:$C$${lookupLast}`;
+ 
+   // Add rows for each day of the month
+   for (let d = 1; d <= daysInMonth; d++) {
+@@ -316,26 +371,7 @@ export async function generatePlanningTemplateXLSX(
+ 
+     // For each employee column
+     for (const emp of employees) {
+-      if (existingSchedules && existingSchedules[emp.name]?.days?.[dateKey]) {
+-        const item = existingSchedules[emp.name].days[dateKey];
+-        const matchingOpt = tableau2Options.find(
+-          (o) =>
+-            o.label === item.shift ||
+-            o.shift === item.shift ||
+-            (o.shift === item.shift && o.hours === item.hours)
+-        );
+-        if (matchingOpt) {
+-          rowValues.push(matchingOpt.label);
+-        } else if (item.shift && item.hours) {
+-          rowValues.push(`${item.shift} · ${item.hours}`);
+-        } else if (item.shift) {
+-          rowValues.push(item.shift);
+-        } else {
+-          rowValues.push(item.hours || '');
+-        }
+-      } else {
+-        rowValues.push('');
+-      }
++      rowValues.push(cellTexts[emp.name]?.[dateKey] ?? '');
+     }
+ 
+     // Rightmost column: Information / Événement for this day
+@@ -378,18 +414,22 @@ export async function generatePlanningTemplateXLSX(
+     }
+   }
+ 
+-  // Summary Row: Total Hours
+-  const totalRowValues: any[] = ['TOTAL HEURES', 'Total calculé du mois'];
+-  for (const emp of employees) {
+-    if (existingSchedules && existingSchedules[emp.name]) {
+-      const tot = existingSchedules[emp.name].totalHours || 0;
+-      totalRowValues.push(tot > 0 ? `${tot}h` : '0h');
+-    } else {
+-      totalRowValues.push('');
+-    }
+-  }
+-  totalRowValues.push(''); // for the Informations column
+-  const totalRow = wsPlanning.addRow(totalRowValues);
++  // Summary Row: Total Hours — formules Excel (recalculées à chaque changement de créneau) avec valeur déjà calculée
++  const firstDayRow = 3; // ligne 1 : titre, ligne 2 : en-têtes
++  const lastDayRow = 2 + daysInMonth;
++  const totalRow = wsPlanning.addRow(['TOTAL HEURES', 'Total calculé du mois']);
++  employees.forEach((emp, idx) => {
++    const colLetter = wsPlanning.getColumn(3 + idx).letter;
++    let cached = 0;
++    for (const txt of Object.values(cellTexts[emp.name] || {})) cached += labelHours.get(txt) ?? 0;
++    const cell = totalRow.getCell(3 + idx);
++    cell.value = {
++      formula: `SUMPRODUCT(SUMIF(${labelRange},${colLetter}${firstDayRow}:${colLetter}${lastDayRow},${hoursRange}))`,
++      result: Math.round(cached * 100) / 100,
++    };
++    cell.numFmt = '0.##"h"';
++    cell.alignment = { horizontal: 'center' };
++  });
+   totalRow.font = { bold: true };
+   totalRow.fill = {
+     type: 'pattern',
+diff --git a/src/shared/coreConfig.ts b/src/shared/coreConfig.ts
+index 7243144..631dafc 100644
+--- a/src/shared/coreConfig.ts
++++ b/src/shared/coreConfig.ts
+@@ -1,13 +1,38 @@
+ import { DEFAULT_CATEGORIES, DEFAULT_TABLEAU2_SHIFTS } from '../config/constants';
+ import type { ShiftCategoryItem, Tableau2ShiftOption } from '../types/planning';
+-import { CORE_SHIFT_CODES } from './planning';
+ 
+-const isCoreName = (name: string | undefined) =>
+-  (CORE_SHIFT_CODES as readonly string[]).includes((name || '').trim().toUpperCase());
++/**
++ * Fusionne la liste existante avec les définitions officielles de base :
++ *  - une entrée de base déjà présente garde SA POSITION (l'ordre choisi par l'administrateur est respecté)
++ *    mais retrouve sa définition officielle (non modifiable) ;
++ *  - les entrées personnalisées sont conservées telles quelles, à leur place ;
++ *  - les entrées de base manquantes sont ajoutées en tête, dans l'ordre officiel ;
++ *  - les doublons d'une entrée de base sont supprimés.
++ */
++function mergeKeepingOrder<T>(existing: T[], defaults: T[], keyOf: (item: T) => string | undefined): T[] {
++  const norm = (k: string | undefined) => (k || '').trim().toUpperCase();
++  const defByKey = new Map(defaults.map((d) => [norm(keyOf(d)), d]));
++  const seen = new Set<string>();
++  const out: T[] = [];
++
++  for (const item of existing) {
++    const k = norm(keyOf(item));
++    const def = defByKey.get(k);
++    if (def) {
++      if (seen.has(k)) continue;
++      seen.add(k);
++      out.push({ ...def });
++    } else {
++      out.push(item);
++    }
++  }
++  const missing = defaults.filter((d) => !seen.has(norm(keyOf(d)))).map((d) => ({ ...d }));
++  return [...missing, ...out];
++}
+ 
+ /**
+  * Garantit que les 6 catégories de base existent, verrouillées et avec leur définition officielle,
+- * SANS supprimer les catégories/créneaux personnalisés ou historiques déjà présents.
++ * SANS supprimer les catégories/créneaux personnalisés ou historiques et SANS imposer leur ordre.
+  * Idempotent : appliquer deux fois donne le même résultat.
+  * Retourne `changed` pour savoir s'il faut enregistrer.
+  */
+@@ -18,11 +43,8 @@ export function ensureCoreConfig(config: {
+   const cats = config.categories ?? [];
+   const shifts = config.tableau2Shifts ?? [];
+ 
+-  const customCats = cats.filter((c) => !isCoreName(c.name));
+-  const customShifts = shifts.filter((o) => !isCoreName(o.shift));
+-
+-  const nextCats = [...DEFAULT_CATEGORIES.map((c) => ({ ...c })), ...customCats];
+-  const nextShifts = [...DEFAULT_TABLEAU2_SHIFTS.map((o) => ({ ...o })), ...customShifts];
++  const nextCats = mergeKeepingOrder(cats, DEFAULT_CATEGORIES, (c) => c.name);
++  const nextShifts = mergeKeepingOrder(shifts, DEFAULT_TABLEAU2_SHIFTS, (o) => o.shift);
+ 
+   const changed = JSON.stringify(cats) !== JSON.stringify(nextCats) || JSON.stringify(shifts) !== JSON.stringify(nextShifts);
+   return { categories: nextCats, tableau2Shifts: nextShifts, changed };
+diff --git a/tests/excel.test.mjs b/tests/excel.test.mjs
+new file mode 100644
+index 0000000..27260e6
+--- /dev/null
++++ b/tests/excel.test.mjs
+@@ -0,0 +1,124 @@
++// Tests de l'export Excel — usage : BASE_URL=/ bun run tests/excel.test.mjs <store.json>
++import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
++import { execSync } from 'child_process';
++
++const mem = new Map();
++globalThis.localStorage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => void mem.set(k, String(v)), removeItem: (k) => void mem.delete(k) };
++globalThis.window = Object.assign(new EventTarget(), { localStorage });
++
++const d = JSON.parse(readFileSync(process.argv[2], 'utf8'));
++const { generatePlanningTemplateXLSX } = await import('../src/services/excelService.ts');
++const { ensureResponsableAdmin } = await import('../src/services/api.ts');
++const ExcelJS = (await import('exceljs')).default;
++
++let pass = 0, fail = 0;
++const t = (name, ok, detail = '') => { ok ? pass++ : fail++; console.log(`${ok ? 'OK   ' : 'ECHEC'}  ${name}${detail ? '  → ' + detail : ''}`); };
++
++const employees = ensureResponsableAdmin(d.config.employees);
++const options = d.config.tableau2Shifts;
++const months = Object.keys(d.schedules).sort();
++
++const JSZip = (await import('jszip')).default;
++// Valeurs mises en cache de la ligne de total, lues dans le XML brut (ce que voient les lecteurs qui ne recalculent pas)
++async function cachedTotals(buf, row, n) {
++  const z = await JSZip.loadAsync(buf);
++  const xml = await z.file('xl/worksheets/sheet1.xml').async('string');
++  const r = xml.match(new RegExp(`<row r="${row}"[\\s\\S]*?</row>`))[0];
++  return Array.from({ length: n }, (_, i) => {
++    const col = String.fromCharCode(67 + i);
++    const m = r.match(new RegExp(`<c r="${col}${row}"[^>]*><f>[^<]*</f><v>([^<]*)</v>`));
++    return m ? parseFloat(m[1]) : null;
++  });
++}
++async function load(buf) { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf); return wb; }
++const totalRowOf = (ws) => ws.getRow(ws.rowCount);
++const cellValue = (c) => (c && typeof c.value === 'object' && c.value !== null && 'formula' in c.value ? c.value : null);
++
++// ---- 1. Modèle : la ligne de total existe, avec une formule pour CHAQUE salarié ---------------------------
++{
++  const tplBuf = await generatePlanningTemplateXLSX('2026-11', employees, options, undefined, {}, 'Test');
++  const wb = await load(tplBuf);
++  const ws = wb.getWorksheet('Planning');
++  const row = totalRowOf(ws);
++  t('modèle : ligne TOTAL HEURES présente', String(row.getCell(1).value) === 'TOTAL HEURES');
++  const all = employees.every((_, i) => cellValue(row.getCell(3 + i))?.formula?.includes('SUMPRODUCT'));
++  t(`modèle : formule de total pour les ${employees.length} salariés (responsable compris)`, all);
++  const tplCache = await cachedTotals(tplBuf, ws.rowCount, employees.length);
++  t('modèle : valeur 0 h enregistrée dans le fichier (jamais de case vide, même sans recalcul)', tplCache.every((v) => v === 0), JSON.stringify(tplCache));
++  t('modèle : liste déroulante conservée', !!ws.getRow(3).getCell(3).dataValidation?.formulae?.[0]?.includes('Créneaux'));
++}
++
++// ---- 2. Planning complet : tous les mois, tous les salariés, totaux cohérents ---------------------------------
++let allCols = true, allTotals = true, allFormulas = true, filledOk = true;
++for (const m of months) {
++  const sc = d.schedules[m];
++  const fullBuf = await generatePlanningTemplateXLSX(m, employees, options, sc, d.dayNotes?.[m] || {}, 'Test');
++  const wb = await load(fullBuf);
++  const ws = wb.getWorksheet('Planning');
++  const row = totalRowOf(ws);
++  const header = ws.getRow(2);
++  const cache = await cachedTotals(fullBuf, ws.rowCount, employees.length);
++  employees.forEach((e, i) => {
++    if (!String(header.getCell(3 + i).value).startsWith(e.name)) allCols = false;
++    const f = cellValue(row.getCell(3 + i));
++    if (!f?.formula) allFormulas = false;
++    const stored = sc[e.name]?.totalHours ?? 0;
++    if (cache[i] === null || Math.abs(cache[i] - stored) > 0.06) { allTotals = false; console.log(`   écart ${m} ${e.name}: valeur du fichier=${cache[i]} enregistré=${stored}`); }
++    const days = Object.values(sc[e.name]?.days || {}).filter((x) => x.shift || x.hours).length;
++    let filled = 0;
++    for (let r = 3; r < ws.rowCount; r++) if (ws.getRow(r).getCell(3 + i).value) filled++;
++    if (filled !== days) { filledOk = false; console.log(`   cases ${m} ${e.name}: ${filled} remplies pour ${days} journées`); }
++  });
++}
++t(`planning complet (${months.length} mois) : une colonne par salarié, responsable compris`, allCols);
++t('planning complet : formule de total pour chaque salarié et chaque mois', allFormulas);
++t('planning complet : total affiché = total enregistré (tous mois, tous salariés)', allTotals);
++t('planning complet : toutes les journées saisies sont présentes (aucune case perdue)', filledOk);
++
++// ---- 3. Mois ≠ mois chargé : l'export doit utiliser le planning DU MOIS demandé --------------------------------
++{
++  const wb = await load(await generatePlanningTemplateXLSX('2026-12', employees, options, d.schedules['2026-12'], {}, 'Test'));
++  const ws = wb.getWorksheet('Planning');
++  const resp = employees.findIndex((e) => /responsable/i.test(e.role || '') || e.isAdmin) ;
++  const idx = resp >= 0 ? resp : 0;
++  let filled = 0; for (let r = 3; r < ws.rowCount; r++) if (ws.getRow(r).getCell(3 + idx).value) filled++;
++  t(`décembre 2026 : colonne du responsable remplie (${employees[idx].name})`, filled > 0, `${filled} cases`);
++}
++
++// ---- 4. Recalcul réel des formules par LibreOffice ------------------------------------------------------------------
++const hasLO = (() => { try { execSync('which soffice', { stdio: 'ignore' }); return true; } catch { return false; } })();
++if (hasLO) {
++  mkdirSync('/tmp/xl', { recursive: true });
++  const m = '2026-11';
++  const sc = d.schedules[m];
++  async function recalc(name, mutate) {
++    const wb = await load(await generatePlanningTemplateXLSX(m, employees, options, sc, {}, 'Test'));
++    const ws = wb.getWorksheet('Planning');
++    if (mutate) mutate(ws);
++    // on retire les valeurs mises en cache : LibreOffice DOIT recalculer les formules
++    const row = totalRowOf(ws);
++    employees.forEach((_, i) => { const f = cellValue(row.getCell(3 + i)); if (f) row.getCell(3 + i).value = { formula: f.formula }; });
++    const file = `/tmp/xl/${name}.xlsx`;
++    await wb.xlsx.writeFile(file);
++    execSync(`cd /tmp/xl && timeout 120 soffice --headless --convert-to csv --outdir /tmp/xl ${file} >/dev/null 2>&1`);
++    const lines = readFileSync(`/tmp/xl/${name}.csv`, 'utf8').trim().split('\n');
++    const last = lines[lines.length - 1].split(',').map((x) => x.replace(/"/g, ''));
++    return employees.map((_, i) => parseFloat((last[2 + i] || '').replace('h', '').replace(',', '.')));
++  }
++  const base = await recalc('recalc_base');
++  const expected = employees.map((e) => sc[e.name]?.totalHours ?? 0);
++  t('LibreOffice recalcule les formules : totaux = totaux enregistrés', JSON.stringify(base) === JSON.stringify(expected), `calculé=${base} attendu=${expected}`);
++  // Modifier une case dans Excel => le total change tout seul
++  const i0 = 0;
++  const mutated = await recalc('recalc_modif', (ws) => {
++    for (let r = 3; r < ws.rowCount; r++) { const c = ws.getRow(r).getCell(3 + i0); if (/\(\d+h/.test(String(c.value)) || c.value === 'BASE') { c.value = 'CONGES'; break; } }
++  });
++  t('changer une case en CONGES dans Excel diminue le total automatiquement', mutated[i0] < base[i0], `${base[i0]} → ${mutated[i0]}`);
++  const emptyMod = await recalc('recalc_vide', (ws) => { for (let r = 3; r < ws.rowCount; r++) ws.getRow(r).getCell(3 + i0).value = null; });
++  t('colonne vidée : total = 0', emptyMod[i0] === 0, `${emptyMod[i0]}`);
++} else {
++  console.log('INFO  LibreOffice absent : recalcul des formules non vérifié');
++}
++
++console.log(`\nRésultat : ${pass} OK, ${fail} échec(s)`);
++process.exit(fail ? 1 : 0);
+diff --git a/tests/generation.test.mjs b/tests/generation.test.mjs
+index 73268ca..ded4db9 100644
+--- a/tests/generation.test.mjs
++++ b/tests/generation.test.mjs
+@@ -49,27 +49,26 @@ t(`total du mois enregistré correct (${janKey} : ${wantJan} h)`, sc[janKey][fir
+ const febKey = months0.find((m) => m.endsWith('-02'));
+ t('février : nombre de jours exact', Object.keys(sc[febKey][firstEmployee.name].days).length === datesOf(febKey).length, `${Object.keys(sc[febKey][firstEmployee.name].days).length} jours`);
+ 
+-// ---- 2. Ajout d'un salarié ---------------------------------------------------------------------
++// ---- 2. Ajout d'un salarié : exercice COMPLET ----------------------------------------------------------
+ const before = JSON.stringify(sc);
+ const newEmp = { ...firstEmployee, name: 'Nouveau', role: 'Test', isAdmin: false };
+ let r = await call('POST', '/api/config', { headers: AH, body: { employees: [...cfg.employees, newEmp] } });
+ t('ajout du salarié accepté', r.status === 200);
+ sc = await schedules();
+ const fromNow = months0.filter((m) => m >= nowKey());
+-const pastMonths = months0.filter((m) => m < nowKey());
+-t(`planning généré du mois courant à la fin de l'exercice (${fromNow.length} mois)`, fromNow.every((m) => monthConforms(sc[m]?.['Nouveau']?.days, m)));
+-t(`mois passés NON générés automatiquement (${pastMonths.length} mois)`, pastMonths.every((m) => !sc[m]?.['Nouveau']));
++t(`planning généré sur les ${months0.length} mois de l'exercice (passés et futurs)`, months0.every((m) => monthConforms(sc[m]?.['Nouveau']?.days, m)));
+ t('les autres salariés ne sont pas modifiés', JSON.stringify(Object.fromEntries(months0.map((m) => [m, sc[m][firstEmployee.name]]))) === JSON.stringify(Object.fromEntries(months0.map((m) => [m, JSON.parse(before)[m][firstEmployee.name]]))));
++const cfgAfter = await config();
++t('totaux enregistrés cohérents sur les mois passés', months0.every((m) => sc[m]['Nouveau'].totalHours === datesOf(m).filter((d) => expectedCode(d) === 'BASE').length * 7));
+ 
+ // ---- 3. Idempotence + reprise ------------------------------------------------------------------
+ const g1 = await call('POST', '/api/planning/generate', { headers: AH, body: {} });
+ t('relancer la génération : 0 journée créée', g1.json?.createdDays === 0, `créées=${g1.json?.createdDays}`);
+-if (pastMonths.length) {
+-  const g2 = await call('POST', '/api/planning/generate', { headers: AH, body: { monthKeys: pastMonths, employeeNames: ['Nouveau'] } });
+-  t('génération explicite sur les mois passés (reprise)', g2.json?.createdDays === pastMonths.reduce((n, m) => n + datesOf(m).length, 0));
+-  const g3 = await call('POST', '/api/planning/generate', { headers: AH, body: { monthKeys: pastMonths, employeeNames: ['Nouveau'] } });
+-  t('…et une seconde fois : 0 journée', g3.json?.createdDays === 0);
+-}
++await call('POST', `/api/schedules/${months0[0]}/shift`, { headers: AH, body: { employeeName: 'Nouveau', dateKey: datesOf(months0[0]).find((d) => expectedCode(d) === 'BASE'), shift: 'EMPTY', hours: '' } });
++const g2 = await call('POST', '/api/planning/generate', { headers: AH, body: {} });
++t('génération par défaut = exercice complet (reprend une journée supprimée dans un mois passé)', g2.json?.createdDays === 1 && g2.json?.months?.[0] === months0[0], `créées=${g2.json?.createdDays}`);
++const g3 = await call('POST', '/api/planning/generate', { headers: AH, body: {} });
++t('…et une seconde fois : 0 journée', g3.json?.createdDays === 0);
+ r = await call('POST', '/api/planning/generate', { headers: SH, body: {} });
+ t('génération sans droits administrateur refusée', r.status === 403);
+ 
+@@ -135,11 +134,17 @@ t('salarié absent de l\'envoi conservé', !!sc[mTot]['Nouveau']);
+ // ---- 9. Catégories verrouillées côté serveur ----------------------------------------------------------
+ r = await call('POST', '/api/config', { headers: AH, body: { categories: [{ id: 'x', name: 'REPOS', color: 'rose' }, { id: 'c1', name: 'INVENTAIRE', color: 'sky' }], tableau2Shifts: [{ id: 'inv', shift: 'INVENTAIRE', hours: '', category: 'INVENTAIRE', label: 'INVENTAIRE', hoursDecimal: 4 }] } });
+ cfg = await config();
+-t('catégories de base impossibles à supprimer ou modifier', JSON.stringify(cfg.categories.slice(0, 6).map((c) => c.name)) === JSON.stringify(['BASE', 'REPOS', 'RTT', 'FERIE', 'CFA', 'CONGES']) && cfg.categories.find((c) => c.name === 'REPOS').color === 'slate' && cfg.categories.every((c) => c.name !== 'BASE' || c.locked));
++t('catégories de base impossibles à supprimer ou modifier', ['BASE', 'REPOS', 'RTT', 'FERIE', 'CFA', 'CONGES'].every((n) => cfg.categories.find((c) => c.name === n)?.locked) && cfg.categories.find((c) => c.name === 'REPOS').color === 'slate', cfg.categories.map((c) => c.name).join(','));
+ t('catégorie personnalisée créée et conservée', cfg.categories.some((c) => c.name === 'INVENTAIRE') && cfg.tableau2Shifts.some((o) => o.shift === 'INVENTAIRE'));
+ r = await call('POST', '/api/config', { headers: AH, body: { categories: cfg.categories.filter((c) => c.name !== 'INVENTAIRE'), tableau2Shifts: cfg.tableau2Shifts.filter((o) => o.shift !== 'INVENTAIRE') } });
+ cfg = await config();
+ t('catégorie personnalisée supprimable', !cfg.categories.some((c) => c.name === 'INVENTAIRE') && cfg.categories.length === 6);
++// Ordre des créneaux (y compris verrouillés) modifiable et conservé par le serveur
++const reorder = [cfg.tableau2Shifts[4], cfg.tableau2Shifts[0], ...cfg.tableau2Shifts.filter((_, i) => i !== 0 && i !== 4)];
++await call('POST', '/api/config', { headers: AH, body: { tableau2Shifts: reorder } });
++const cfgOrd = await config();
++t('ordre des créneaux verrouillés modifiable et conservé par le serveur', JSON.stringify(cfgOrd.tableau2Shifts.map((o) => o.shift)) === JSON.stringify(reorder.map((o) => o.shift)), cfgOrd.tableau2Shifts.map((o) => o.shift).join(','));
++t('…créneaux toujours verrouillés', cfgOrd.tableau2Shifts.every((o) => o.locked));
+ 
+ // ---- 10. Données réelles : option A (aucune réinitialisation) ----------------------------------------------
+ if (DATA && existsSync(DATA)) {
+@@ -152,11 +157,12 @@ if (DATA && existsSync(DATA)) {
+   t('plannings réels strictement identiques après migration (aucune journée ajoutée/modifiée/supprimée)', identical);
+   const c2 = await config();
+   const legacy = real.config.categories.map((c) => c.name).filter((n) => !['BASE', 'REPOS', 'RTT', 'FERIE', 'CFA', 'CONGES'].includes(n));
+-  t('catégories réelles : 6 de base + anciennes conservées comme personnalisées', JSON.stringify(c2.categories.map((c) => c.name)) === JSON.stringify(['BASE', 'REPOS', 'RTT', 'FERIE', 'CFA', 'CONGES', ...legacy]), c2.categories.map((c) => c.name).join(','));
++  const realNames = real.config.categories.map((c) => c.name);
++t('catégories réelles : ordre existant conservé, 6 catégories de base présentes et verrouillées, anciennes conservées', JSON.stringify(c2.categories.map((c) => c.name)) === JSON.stringify(['BASE', 'FERIE', 'CFA', ...realNames]) && ['BASE', 'REPOS', 'RTT', 'FERIE', 'CFA', 'CONGES'].every((n) => c2.categories.find((c) => c.name === n)?.locked), c2.categories.map((c) => c.name).join(','));
+   t('créneaux réels (OUVERTURE, FERMETURE…) conservés', ['OUVERTURE', 'FERMETURE', 'JOURNEE'].every((s) => c2.tableau2Shifts.some((o) => o.shift === s)));
+   t('12 mois visibles conservés', c2.visibleMonths.length === 12);
+   const dry = await call('POST', '/api/planning/generate', { headers: AH, body: {} });
+-  console.log(`INFO  une génération manuelle (mois courant → fin d'exercice) créerait ${dry.json.createdDays} journée(s) manquante(s) sur vos données réelles — jamais lancée automatiquement`);
++  console.log(`INFO  une génération manuelle (exercice complet) créerait ${dry.json.createdDays} journée(s) manquante(s) sur vos données réelles — jamais lancée automatiquement`);
+ }
+ 
+ // ---- nettoyage -----------------------------------------------------------------------------------------------
+diff --git a/tests/rules.test.mjs b/tests/rules.test.mjs
+index 29260f8..dcc73cf 100644
+--- a/tests/rules.test.mjs
++++ b/tests/rules.test.mjs
+@@ -76,9 +76,20 @@ const migrated = ensureCoreConfig({
+   categories: [{ id: 'x', name: 'REPOS', color: 'rose' }, { id: 'cat_matin', name: 'MATIN', color: 'sky' }],
+   tableau2Shifts: [{ id: 'o1', shift: 'OUVERTURE', hours: '09:00-12:00', category: 'JOURNEE', label: 'OUVERTURE' }, { id: 'repos', shift: 'REPOS', hours: '', category: 'REPOS', label: 'REPOS modifié' }],
+ });
+-eq('migration : 6 catégories de base en tête, personnalisées conservées', migrated.categories.map((c) => c.name), ['BASE', 'REPOS', 'RTT', 'FERIE', 'CFA', 'CONGES', 'MATIN']);
++eq('migration : catégories de base manquantes ajoutées en tête, entrées existantes à leur place', migrated.categories.map((c) => c.name), ['BASE', 'RTT', 'FERIE', 'CFA', 'CONGES', 'REPOS', 'MATIN']);
+ eq('migration : créneau personnalisé conservé, base rétablie', [migrated.tableau2Shifts.some((o) => o.shift === 'OUVERTURE'), migrated.tableau2Shifts.find((o) => o.shift === 'REPOS').label], [true, 'REPOS']);
+ eq('migration idempotente', ensureCoreConfig(migrated).changed, false);
++// L'ordre choisi par l'administrateur est respecté (y compris pour les catégories de base)
++const byName = (n) => migrated.tableau2Shifts.find((o) => o.shift === n);
++const rest = migrated.tableau2Shifts.filter((o) => !['RTT', 'BASE', 'OUVERTURE'].includes(o.shift));
++const reordered = { categories: migrated.categories.slice(), tableau2Shifts: [byName('RTT'), byName('BASE'), byName('OUVERTURE'), ...rest] };
++const kept = ensureCoreConfig(reordered);
++eq('ordre personnalisé des créneaux de base conservé', kept.tableau2Shifts.slice(0, 3).map((o) => o.shift), ['RTT', 'BASE', 'OUVERTURE']);
++eq('…sans modification (ordre déjà valide)', kept.changed, false);
++const lost = ensureCoreConfig({ categories: [], tableau2Shifts: reordered.tableau2Shifts.filter((o) => o.shift !== 'CFA') });
++eq('catégorie de base manquante rétablie en tête, ordre des autres conservé', [lost.tableau2Shifts[0].shift, lost.tableau2Shifts[1].shift, lost.tableau2Shifts[2].shift], ['CFA', 'RTT', 'BASE']);
++const dup = ensureCoreConfig({ categories: [], tableau2Shifts: [...reordered.tableau2Shifts, { id: 'dup', shift: 'BASE', hours: '', category: 'BASE', label: 'BASE' }] });
++eq('doublon d\'une catégorie de base supprimé', dup.tableau2Shifts.filter((o) => o.shift === 'BASE').length, 1);
+ 
+ // ---- 6. CFA : 0 h travaillée, -7 h sur l'objectif mensuel -------------------------------------
+ const emp = { name: 'Test', role: 'x', contractType: 'HEBDO_35H', weeklyHoursQuota: 35 };

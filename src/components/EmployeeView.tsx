@@ -134,7 +134,7 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
       const cat = categorizeShift(day.shift, day.hours);
       if (cat === 'REPOS') {
         restDays++;
-      } else if (cat === 'CONGES' || cat === 'RTT') {
+      } else if (cat === 'CONGES' || cat === 'RTT' || cat === 'CFA') {
         rttOrLeaves++;
       }
     });

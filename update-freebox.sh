@@ -43,7 +43,8 @@ if [ -d "$TEMP_BACKUP" ] && [ "$(ls -A "$TEMP_BACKUP" 2>/dev/null)" ]; then
 fi
 
 # 5. Garantir les permissions d'écriture complètes pour Docker
-chmod -R 777 "$APP_DIR/data" 2>/dev/null || true
+chown -R 1000:1000 "$APP_DIR/data" 2>/dev/null || sudo chown -R 1000:1000 "$APP_DIR/data" 2>/dev/null || true
+chmod -R u=rwX,g=rX,o= "$APP_DIR/data" 2>/dev/null || sudo chmod -R u=rwX,g=rX,o= "$APP_DIR/data" 2>/dev/null || true
 
 # 6. Reconstruction et relance du conteneur avec la nouvelle version
 echo "🐳 Reconstruction du conteneur Docker avec les nouveaux fichiers..."

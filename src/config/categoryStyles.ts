@@ -326,6 +326,12 @@ export function getCategoryDetails(
   } else if (cleanCat === 'HORAIRE') {
     defaultColorId = 'indigo';
     defaultIconId = 'clock';
+  } else if (cleanCat === 'BASE') {
+    defaultColorId = 'emerald';
+    defaultIconId = 'briefcase';
+  } else if (cleanCat === 'CFA') {
+    defaultColorId = 'indigo';
+    defaultIconId = 'graduation-cap';
   }
 
   const chosenColorId = directColor || found?.color || defaultColorId;

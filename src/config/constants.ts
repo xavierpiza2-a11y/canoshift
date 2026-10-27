@@ -1,3 +1,4 @@
+import { getExerciseMonthItems, getCurrentExerciseStartYear } from '../shared/planning';
 import type { Employee, MonthItem, ShiftCategory, Tableau2ShiftOption, ShiftCategoryItem } from '../types/planning.ts';
 
 export const DEFAULT_API_TOKEN = 'CANOSHIFT';
@@ -7,202 +8,25 @@ export const DEFAULT_ADMIN_PIN = '000000';
 /**
  * Default categories for shifts
  */
+// Les 6 catégories de base : verrouillées (non modifiables / non supprimables).
+// Des catégories personnalisées peuvent être créées en plus par l'administrateur.
 export const DEFAULT_CATEGORIES: ShiftCategoryItem[] = [
-  { id: 'cat_matin', name: 'MATIN', color: 'sky', icon: 'sun' },
-  { id: 'cat_soir', name: 'SOIR', color: 'amber', icon: 'sunset' },
-  { id: 'cat_journee', name: 'JOURNEE', color: 'emerald', icon: 'briefcase' },
-  { id: 'cat_repos', name: 'REPOS', color: 'slate', icon: 'home' },
-  { id: 'cat_conges', name: 'CONGES', color: 'orange', icon: 'palmtree' },
-  { id: 'cat_rtt', name: 'RTT', color: 'teal', icon: 'sparkles' },
-  { id: 'cat_ferie', name: 'FERIE', color: 'purple', icon: 'calendar' },
-  { id: 'cat_at', name: 'AT', color: 'rose', icon: 'heart' },
-  { id: 'cat_formation', name: 'FORMATION', color: 'purple', icon: 'graduation-cap' },
-  { id: 'cat_horaire', name: 'HORAIRE', color: 'indigo', icon: 'clock' },
-  { id: 'cat_autre', name: 'AUTRE', color: 'zinc', icon: 'tag' },
+  { id: 'cat_base', name: 'BASE', color: 'emerald', icon: 'briefcase', locked: true },
+  { id: 'cat_repos', name: 'REPOS', color: 'slate', icon: 'home', locked: true },
+  { id: 'cat_rtt', name: 'RTT', color: 'teal', icon: 'sparkles', locked: true },
+  { id: 'cat_ferie', name: 'FERIE', color: 'purple', icon: 'calendar', locked: true },
+  { id: 'cat_cfa', name: 'CFA', color: 'indigo', icon: 'graduation-cap', locked: true },
+  { id: 'cat_conges', name: 'CONGES', color: 'orange', icon: 'palmtree', locked: true },
 ];
 
-/**
- * Standard choices corresponding to Créneaux (Horaires possibles)
- */
 export const DEFAULT_TABLEAU2_SHIFTS: Tableau2ShiftOption[] = [
-  {
-    id: 'repos',
-    shift: 'REPOS',
-    hours: '',
-    category: 'REPOS',
-    color: 'slate',
-    label: 'REPOS',
-    description: 'Jour de repos',
-    hoursDecimal: 0,
-    dayStatus: 'REPOS',
-  },
-  {
-    id: 'conges',
-    shift: 'CONGES',
-    hours: '',
-    category: 'CONGES',
-    color: 'amber',
-    label: 'CONGES',
-    description: 'Congés payés',
-    hoursDecimal: 0,
-    dayStatus: 'ABSENT',
-  },
-  {
-    id: 'rtt',
-    shift: 'RTT',
-    hours: '',
-    category: 'RTT',
-    color: 'teal',
-    label: 'RTT',
-    description: 'Réduction du temps de travail',
-    hoursDecimal: 0,
-    dayStatus: 'ABSENT',
-  },
-  {
-    id: 'matin_830_1230',
-    shift: 'MATIN',
-    hours: '08:30-12:30',
-    category: 'MATIN',
-    color: 'sky',
-    label: 'MATIN · 08:30-12:30 (4h)',
-    description: 'Vacation matin standard (4h)',
-    hoursDecimal: 4,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'matin_830_1330',
-    shift: 'MATIN',
-    hours: '08:30-13:30',
-    category: 'MATIN',
-    color: 'sky',
-    label: 'MATIN · 08:30-13:30 (5h)',
-    description: 'Vacation matin longue (5h)',
-    hoursDecimal: 5,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'matin_900_1300',
-    shift: 'MATIN',
-    hours: '09:00-13:00',
-    category: 'MATIN',
-    color: 'sky',
-    label: 'MATIN · 09:00-13:00 (4h)',
-    description: 'Vacation matin décalée (4h)',
-    hoursDecimal: 4,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'soir_1400_1900',
-    shift: 'SOIR',
-    hours: '14:00-19:00',
-    category: 'SOIR',
-    color: 'orange',
-    label: 'SOIR · 14:00-19:00 (5h)',
-    description: 'Fermeture magasin standard (5h)',
-    hoursDecimal: 5,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'soir_1430_1900',
-    shift: 'SOIR',
-    hours: '14:30-19:00',
-    category: 'SOIR',
-    color: 'orange',
-    label: 'SOIR · 14:30-19:00 (4h30)',
-    description: 'Fermeture magasin courte (4h30)',
-    hoursDecimal: 4.5,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'soir_1400_1930',
-    shift: 'SOIR',
-    hours: '14:00-19:30',
-    category: 'SOIR',
-    color: 'orange',
-    label: 'SOIR · 14:00-19:30 (5h30)',
-    description: 'Fermeture magasin tardive (5h30)',
-    hoursDecimal: 5.5,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'journee_830_1800',
-    shift: 'JOURNEE',
-    hours: '08:30-12:30 , 14:00-18:00',
-    category: 'JOURNEE',
-    color: 'emerald',
-    label: 'JOURNÉE · 08:30-12:30 , 14:00-18:00 (8h)',
-    description: 'Journée complète 8h',
-    hoursDecimal: 8,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'journee_900_1900',
-    shift: 'JOURNEE',
-    hours: '09:00-12:30 , 14:00-19:00',
-    category: 'JOURNEE',
-    color: 'emerald',
-    label: 'JOURNÉE · 09:00-12:30 , 14:00-19:00 (7h30)',
-    description: 'Journée complète avec fermeture 7h30',
-    hoursDecimal: 7.5,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'journee_900_1430_1900',
-    shift: 'JOURNEE',
-    hours: '09:00-12:30 , 14:30-19:00',
-    category: 'JOURNEE',
-    color: 'emerald',
-    label: 'JOURNÉE · 09:00-12:30 , 14:30-19:00 (7h)',
-    description: 'Journée complète standard 7h',
-    hoursDecimal: 7,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'journee_1000_1430_1900',
-    shift: 'JOURNEE',
-    hours: '10:00-12:30 , 14:30-19:00',
-    category: 'JOURNEE',
-    color: 'emerald',
-    label: 'JOURNÉE · 10:00-12:30 , 14:30-19:00 (7h)',
-    description: 'Journée décalée 7h',
-    hoursDecimal: 7,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'formation',
-    shift: 'FORMATION',
-    hours: '09:00-12:30 , 13:30-17:00',
-    category: 'FORMATION',
-    color: 'purple',
-    label: 'FORMATION · 09:00-12:30 , 13:30-17:00 (7h)',
-    description: 'Journée de formation / réunion (7h)',
-    hoursDecimal: 7,
-    dayStatus: 'PRESENT',
-  },
-  {
-    id: 'ferie',
-    shift: 'FERIE',
-    hours: '',
-    category: 'FERIE',
-    color: 'purple',
-    label: 'FÉRIÉ',
-    description: 'Jour férié chômé (-7h à faire sur le mois / -1j forfait)',
-    hoursDecimal: 0,
-    dayStatus: 'REPOS',
-  },
-  {
-    id: 'maladie',
-    shift: 'AT',
-    hours: '',
-    category: 'AT',
-    color: 'rose',
-    label: 'ARRÊT MALADIE / AT',
-    description: 'Arrêt de travail (comptabilisé 7h en annualisé ou 1j en forfait jour)',
-    hoursDecimal: 7,
-    dayStatus: 'ABSENT',
-  },
+  { id: 'base', shift: 'BASE', hours: '', category: 'BASE', color: 'emerald', label: 'BASE', description: 'Journée de base (7 h)', hoursDecimal: 7, dayStatus: 'PRESENT', locked: true },
+  { id: 'repos', shift: 'REPOS', hours: '', category: 'REPOS', color: 'slate', label: 'REPOS', description: 'Jour de repos', hoursDecimal: 0, dayStatus: 'REPOS', locked: true },
+  { id: 'rtt', shift: 'RTT', hours: '', category: 'RTT', color: 'teal', label: 'RTT', description: 'Réduction du temps de travail', hoursDecimal: 0, dayStatus: 'ABSENT', locked: true },
+  { id: 'ferie', shift: 'FERIE', hours: '', category: 'FERIE', color: 'purple', label: 'FERIE', description: 'Jour férié', hoursDecimal: 0, dayStatus: 'REPOS', locked: true },
+  { id: 'cfa', shift: 'CFA', hours: '', category: 'CFA', color: 'indigo', label: 'CFA', description: 'Journée au CFA', hoursDecimal: 0, dayStatus: 'ABSENT', locked: true },
+  { id: 'conges', shift: 'CONGES', hours: '', category: 'CONGES', color: 'orange', label: 'CONGES', description: 'Congés payés', hoursDecimal: 0, dayStatus: 'ABSENT', locked: true },
 ];
-
 
 export const DEFAULT_STORE_NAME = 'CanoShift';
 
@@ -223,22 +47,11 @@ export const DEFAULT_EMPLOYEES: Employee[] = [
   },
 ];
 
-export const DEFAULT_ALL_MONTHS: MonthItem[] = [
-  { key: '2026-06', tab: 'JUIN 26', label: 'Juin 2026' },
-  { key: '2026-07', tab: 'JUILLET 26', label: 'Juillet 2026' },
-  { key: '2026-08', tab: 'AOUT 26', label: 'Août 2026' },
-  { key: '2026-09', tab: 'SEPTEMBRE 26', label: 'Septembre 2026' },
-  { key: '2026-10', tab: 'OCTOBRE 26', label: 'Octobre 2026' },
-  { key: '2026-11', tab: 'NOVEMBRE 26', label: 'Novembre 2026' },
-  { key: '2026-12', tab: 'DECEMBRE 26', label: 'Décembre 2026' },
-  { key: '2027-01', tab: 'JANVIER 27', label: 'Janvier 2027' },
-  { key: '2027-02', tab: 'FEVRIER 27', label: 'Février 2027' },
-  { key: '2027-03', tab: 'MARS 27', label: 'Mars 2027' },
-  { key: '2027-04', tab: 'AVRIL 27', label: 'Avril 2027' },
-  { key: '2027-05', tab: 'MAI 27', label: 'Mai 2027' },
-];
+// Exercice courant (1er juin -> 31 mai), calculé à partir de la date : aucun changement de code d'une année à l'autre.
+export const DEFAULT_ALL_MONTHS: MonthItem[] = getExerciseMonthItems(getCurrentExerciseStartYear());
 
-export const DEFAULT_VISIBLE_MONTHS = ['2026-09', '2026-10'];
+// Les 12 mois de l'exercice sont visibles par défaut.
+export const DEFAULT_VISIBLE_MONTHS: string[] = DEFAULT_ALL_MONTHS.map((m) => m.key);
 
 /**
  * Categorize a shift code & hours into styling & semantic group
@@ -262,6 +75,15 @@ export function categorizeShift(shiftText: string, hoursText?: string): ShiftCat
     return 'AT';
   }
 
+  if (s === 'BASE') {
+    return 'BASE';
+  }
+
+  // CFA est une catégorie distincte de RTT (0 h travaillée, mais -7 h sur l'objectif mensuel)
+  if (s === 'CFA') {
+    return 'CFA';
+  }
+
   if (s === 'REPOS') {
     return 'REPOS';
   }
@@ -276,7 +98,7 @@ export function categorizeShift(shiftText: string, hoursText?: string): ShiftCat
     return 'CONGES';
   }
 
-  if (s === 'RTT' || s === 'RECUP' || s === 'REL' || s === 'CFA') {
+  if (s === 'RTT' || s === 'RECUP' || s === 'REL') {
     return 'RTT';
   }
 

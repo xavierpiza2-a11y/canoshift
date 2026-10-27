@@ -28,7 +28,6 @@ import {
   deleteMonthData,
   getCalendarDaysForMonth,
   fetchAvailableShifts,
-  updateShiftInSheet,
   getStoredTableau2Shifts,
   renameEmployeeData,
   ensureResponsableAdmin,
@@ -41,7 +40,8 @@ import {
   deleteEmployeeHistory,
 } from '../services/api';
 import { exportTeamPlanningToPDF } from '../services/pdfExport';
-import { calculateEmployeeBalances, simulateShiftImpact, getMonthWorkingCalendar } from '../services/hoursService';
+import { getMonthWorkingCalendar } from '../services/hoursService';
+import { getExerciseMonthItems, getExerciseStartYear, getCurrentExerciseStartYear } from '../shared/planning';
 import { AdminExcelSection } from './AdminExcelSection';
 import { AdminTableau2Section } from './AdminTableau2Section';
 import { AdminDatabaseSection } from './AdminDatabaseSection';
@@ -64,8 +64,6 @@ import {
   ArrowDown,
   Lock,
   LockKeyhole,
-  Clock,
-  Download,
   Edit3,
   FileSpreadsheet,
   Sun,
@@ -134,7 +132,6 @@ interface AdminViewProps {
   onUpdateVisibleMonths: (months: string[]) => void;
   onUpdateAllMonths?: (months: MonthItem[]) => void;
   onSwitchToProfile?: (emp: Employee) => void;
-  onShiftUpdated?: (employeeName: string, dateKey: string, shift: string, hours: string) => void;
   onPlanningImported?: (
     monthKey: string,
     teamSchedules: Record<string, any>,
@@ -157,7 +154,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
   onUpdateVisibleMonths,
   onUpdateAllMonths,
   onSwitchToProfile,
-  onShiftUpdated,
   onPlanningImported,
   onBackToPlanning,
 }) => {
@@ -173,29 +169,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
   // Active Admin Sub-tab: Default to Excel tab as requested
   const [adminTab, setAdminTab] = useState<
-    'excel' | 'shifts_reference' | 'shifts' | 'team' | 'months' | 'history' | 'connection'
+    'excel' | 'shifts_reference' | 'team' | 'months' | 'history' | 'connection'
   >('excel');
 
-  // Shifts Direct Modification State (Strictly Tableau 2 choices)
-  const [shiftEditMonth, setShiftEditMonth] = useState<string>(
-    visibleMonths[0] || allMonths[0]?.key || '2026-09'
-  );
-  const [shiftEditEmployee, setShiftEditEmployee] = useState<string>(
-    employees[0]?.name || ''
-  );
-  const [shiftEditDate, setShiftEditDate] = useState<string>(
-    () => `${visibleMonths[0] || '2026-09'}-01`
-  );
-  const [shiftEditOptionId, setShiftEditOptionId] = useState<string>('repos');
   const [tableau2Options, setTableau2Options] = useState<Tableau2ShiftOption[]>(
     getStoredTableau2Shifts
   );
-  const [isUpdatingShift, setIsUpdatingShift] = useState(false);
-  const [shiftUpdateStatus, setShiftUpdateStatus] = useState<{
-    type: 'success' | 'error';
-    text: string;
-  } | null>(null);
-  const [isExportingTeamPdf, setIsExportingTeamPdf] = useState(false);
 
   // Global Admin Toast notification
   const [adminToast, setAdminToast] = useState<{
@@ -400,12 +379,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
     }
   }, [isAuthenticated]);
 
-  // Keep shiftEditDate in sync with month
-  useEffect(() => {
-    if (!shiftEditDate.startsWith(shiftEditMonth)) {
-      setShiftEditDate(`${shiftEditMonth}-01`);
-    }
-  }, [shiftEditMonth]);
 
   // Update default label & tab when month picker value changes
   const handleMonthPickerChange = (val: string) => {
@@ -757,7 +730,34 @@ export const AdminView: React.FC<AdminViewProps> = ({
     onUpdateVisibleMonths(updatedVisible);
 
     const daysCount = getCalendarDaysForMonth(key).length;
-    showToast('success', `Mois « ${label} » créé avec succès (${daysCount} dates du calendrier).`);
+    showToast('success', `Mois « ${label} » créé (${daysCount} jours). Les journées de tous les salariés sont générées automatiquement : férié, repos le week-end, journée de base sinon.`);
+  };
+
+  // Ajoute l'exercice suivant (12 mois, 1er juin -> 31 mai) ; le serveur génère les journées manquantes
+  const nextExerciseStartYear = monthsList.length
+    ? Math.max(...monthsList.map((m) => getExerciseStartYear(m.key))) + 1
+    : getCurrentExerciseStartYear();
+
+  const handleAddNextExercise = async () => {
+    const items = getExerciseMonthItems(nextExerciseStartYear).filter(
+      (item) => !monthsList.some((m) => m.key === item.key)
+    );
+    if (items.length === 0) {
+      showToast('error', 'Cet exercice existe déjà.');
+      return;
+    }
+    const updatedMonths = [...monthsList, ...items];
+    const updatedVisible = [...selectedVisibleMonths, ...items.map((i) => i.key).filter((k) => !selectedVisibleMonths.includes(k))];
+
+    setMonthsList(updatedMonths);
+    setSelectedVisibleMonths(updatedVisible);
+
+    await saveAllMonths(updatedMonths);
+    await saveVisibleMonths(updatedVisible);
+    onUpdateAllMonths?.(updatedMonths);
+    onUpdateVisibleMonths(updatedVisible);
+
+    showToast('success', `Exercice ${nextExerciseStartYear}-${nextExerciseStartYear + 1} ajouté (${items.length} mois). Journées générées pour tous les salariés.`);
   };
 
   // Start Edit Month
@@ -869,62 +869,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setMonthsSavedSuccess(true);
     setTimeout(() => setMonthsSavedSuccess(false), 3000);
     showToast('success', "Configuration des mois sauvegardée.");
-  };
-
-  // Direct Shift Modification Handler (Tableau 2)
-  const handleDirectShiftUpdate = async () => {
-    const selectedOpt = tableau2Options.find((o) => o.id === shiftEditOptionId);
-    if (!selectedOpt) {
-      setShiftUpdateStatus({ type: 'error', text: 'Veuillez sélectionner un horaire Tableau 2.' });
-      return;
-    }
-
-    setIsUpdatingShift(true);
-    setShiftUpdateStatus(null);
-
-    try {
-      const res = await updateShiftInSheet(
-        shiftEditMonth,
-        shiftEditEmployee,
-        shiftEditDate,
-        selectedOpt.shift,
-        selectedOpt.hours
-      );
-
-      if (res.success) {
-        setShiftUpdateStatus({
-          type: 'success',
-          text: `Horaire enregistré avec succès pour ${shiftEditEmployee} le ${shiftEditDate} !`,
-        });
-        if (onShiftUpdated) {
-          onShiftUpdated(shiftEditEmployee, shiftEditDate, selectedOpt.shift, selectedOpt.hours);
-        }
-      } else {
-        setShiftUpdateStatus({ type: 'error', text: res.message });
-      }
-    } catch (err: any) {
-      setShiftUpdateStatus({ type: 'error', text: err.message || 'Erreur lors de la mise à jour.' });
-    } finally {
-      setIsUpdatingShift(false);
-    }
-  };
-
-  // PDF Export from Admin
-  const handleExportPDF = async () => {
-    setIsExportingTeamPdf(true);
-    try {
-      const monthObj = monthsList.find((m) => m.key === shiftEditMonth);
-      await exportTeamPlanningToPDF({
-        monthKey: shiftEditMonth,
-        monthLabel: monthObj?.label || shiftEditMonth,
-        employees,
-        teamSchedules: teamSchedules || {},
-      });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsExportingTeamPdf(false);
-    }
   };
 
   // Check if current user has admin rights
@@ -1104,7 +1048,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
       </div>
 
       {/* Admin Navigation Sub-Tabs */}
-      <div className="grid grid-cols-3 sm:grid-cols-7 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-semibold">
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-semibold">
         <button
           onClick={() => setAdminTab('excel')}
           className={`py-2 px-1 rounded-lg transition-colors flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center ${
@@ -1127,18 +1071,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
         >
           <Sparkles className="w-3.5 h-3.5 text-amber-600" />
           <span className="text-[11px] sm:text-xs">Créneaux</span>
-        </button>
-
-        <button
-          onClick={() => setAdminTab('shifts')}
-          className={`py-2 px-1 rounded-lg transition-colors flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center ${
-            adminTab === 'shifts'
-              ? 'bg-white text-emerald-900 font-bold shadow-xs border-b-2 border-emerald-600'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          <Clock className="w-3.5 h-3.5 text-emerald-600" />
-          <span className="text-[11px] sm:text-xs">Modifier shift</span>
         </button>
 
         <button
@@ -1200,7 +1132,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
         <AdminExcelSection
           employees={employees}
           allMonths={monthsList}
-          selectedMonth={shiftEditMonth || visibleMonths[0] || '2026-09'}
+          selectedMonth={visibleMonths[0] || monthsList[0]?.key || ''}
           teamSchedules={teamSchedules || {}}
           tableau2Options={tableau2Options}
           onPlanningImported={(mKey, scheds, newEmps) => {
@@ -1220,219 +1152,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
           tableau2Options={tableau2Options}
           onUpdateOptions={(newOpts) => setTableau2Options(newOpts)}
         />
-      )}
-
-      {/* SUB-TAB 0: MODIFIER HORAIRES PONCTUELS (TABLEAU 2) */}
-      {adminTab === 'shifts' && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Modifier un créneau horaire
-                  </h3>
-                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
-                    Admin
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Appliquez directement un créneau pré-configuré du Tableau 2 sur une date précise.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleExportPDF}
-                disabled={isExportingTeamPdf}
-                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50 self-start sm:self-auto"
-              >
-                <Download className="w-3.5 h-3.5 text-slate-600" />
-                <span>{isExportingTeamPdf ? 'Génération...' : 'Imprimer Planning PDF'}</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Mois concerné :
-                </label>
-                <select
-                  value={shiftEditMonth}
-                  onChange={(e) => setShiftEditMonth(e.target.value)}
-                  className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white transition-all"
-                >
-                  {monthsList.map((m) => (
-                    <option key={m.key} value={m.key}>
-                      {m.label} ({m.tab})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Salarié de l'équipe :
-                </label>
-                <select
-                  value={shiftEditEmployee}
-                  onChange={(e) => setShiftEditEmployee(e.target.value)}
-                  className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white transition-all"
-                >
-                  {employees.map((emp) => (
-                    <option key={emp.name} value={emp.name}>
-                      {emp.name} {emp.role ? `(${emp.role})` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Date du shift :
-                </label>
-                <input
-                  type="date"
-                  value={shiftEditDate}
-                  onChange={(e) => setShiftEditDate(e.target.value)}
-                  className="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white transition-all"
-                />
-              </div>
-            </div>
-
-            {/* Choices corresponding strictly to Créneaux */}
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Sélectionnez le créneau souhaité :
-                </span>
-                <span className="text-[11px] text-slate-400">
-                  {tableau2Options.length} choix configurés
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
-                {tableau2Options.map((opt) => {
-                  const isSelected = shiftEditOptionId === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setShiftEditOptionId(opt.id)}
-                      className={`p-3 rounded-xl border text-left text-xs transition-all flex items-center justify-between ${
-                        isSelected
-                          ? 'border-emerald-600 bg-emerald-50 text-emerald-950 font-bold shadow-xs ring-1 ring-emerald-500'
-                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-                      }`}
-                    >
-                      <div className="min-w-0 pr-1">
-                        <p className="truncate">{opt.label}</p>
-                        {opt.hours && (
-                          <p className="text-[10px] text-emerald-700 font-mono mt-0.5 truncate">
-                            {opt.hours}
-                          </p>
-                        )}
-                      </div>
-                      <div
-                        className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${
-                          isSelected ? 'bg-emerald-600 text-white' : 'border border-slate-300'
-                        }`}
-                      >
-                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Real-time RH situation pill */}
-            {(() => {
-              const currentDirectEmployeeObj =
-                employees.find((e) => e.name.toLowerCase() === shiftEditEmployee.toLowerCase()) ||
-                employees[0];
-              if (!currentDirectEmployeeObj) return null;
-
-              const currentDirectBalances = calculateEmployeeBalances({
-                employee: currentDirectEmployeeObj,
-                selectedMonth: shiftEditMonth,
-                targetDate: shiftEditDate,
-              });
-
-              const currentDirectSelectedOpt = tableau2Options.find((o) => o.id === shiftEditOptionId);
-              if (!currentDirectSelectedOpt) return null;
-
-              const directShiftImpact = simulateShiftImpact({
-                currentBalances: currentDirectBalances,
-                targetDate: shiftEditDate,
-                currentShift: '',
-                newOption: currentDirectSelectedOpt,
-              });
-
-              return (
-                <div className="p-3.5 rounded-2xl bg-linear-to-r from-slate-900 to-slate-850 text-white text-xs space-y-2 border border-slate-800 shadow-sm">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <Scale className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="font-bold text-white">
-                        Impact RH : {currentDirectEmployeeObj.name}
-                      </span>
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-white/10 text-emerald-300">
-                        {currentDirectBalances.contractLabel}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      Exercice : {currentDirectBalances.exercise.label}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-slate-200 bg-white/5 p-2 rounded-xl border border-white/5 font-medium">
-                    {directShiftImpact.summaryText}
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Status Feedback */}
-            {shiftUpdateStatus && (
-              <div
-                className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
-                  shiftUpdateStatus.type === 'success'
-                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                    : 'bg-rose-50 text-rose-800 border border-rose-200'
-                }`}
-              >
-                {shiftUpdateStatus.type === 'success' ? (
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
-                )}
-                <span>{shiftUpdateStatus.text}</span>
-              </div>
-            )}
-
-            {/* Action Submit */}
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={handleDirectShiftUpdate}
-                disabled={isUpdatingShift}
-                className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 rounded-xl transition-all shadow-xs disabled:opacity-50"
-              >
-                {isUpdatingShift ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Mise à jour du planning en cours...</span>
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4" />
-                    <span>Enregistrer la modification</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* SUB-TAB 1: TEAM */}
@@ -2210,6 +1929,25 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 );
               })}
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-emerald-900">
+                Exercice suivant : {nextExerciseStartYear}-{nextExerciseStartYear + 1}
+              </p>
+              <p className="text-xs text-emerald-800/80">
+                Ajoute les 12 mois (juin → mai) et génère les journées de tous les salariés : férié, repos le week-end,
+                journée de base le reste du temps. Les mois et journées déjà saisis ne sont jamais modifiés.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAddNextExercise}
+              className="shrink-0 px-4 py-2 rounded-xl bg-emerald-700 text-white text-sm font-semibold hover:bg-emerald-800 transition-colors"
+            >
+              Ajouter l'exercice
+            </button>
           </div>
 
           {/* Form to create a new month with automatic calendar dates matching */}

@@ -246,6 +246,7 @@ export const AdminTableau2Section: React.FC<AdminTableau2SectionProps> = ({
 
   // --- OPEN MODAL (EDIT) ---
   const handleOpenEdit = (opt: Tableau2ShiftOption) => {
+    if (opt.locked) return; // catégorie de base : non modifiable
     setEditingShiftId(opt.id);
     const parsed = parseHoursToRanges(opt.hours);
     const hasRanges = Boolean(parsed.amStart && parsed.amEnd);
@@ -380,7 +381,7 @@ export const AdminTableau2Section: React.FC<AdminTableau2SectionProps> = ({
 
   // --- DELETE SHIFT ---
   const handleConfirmDelete = () => {
-    if (!shiftToDelete) return;
+    if (!shiftToDelete || shiftToDelete.locked) return; // catégorie de base : non supprimable
     const updated = tableau2Options.filter((opt) => opt.id !== shiftToDelete.id);
     saveStoredTableau2Shifts(updated);
     onUpdateOptions(updated);
@@ -589,6 +590,14 @@ export const AdminTableau2Section: React.FC<AdminTableau2SectionProps> = ({
 
                 {/* Right: Reorder & Edit/Delete Buttons */}
                 <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
+                  {opt.locked && (
+                    <span
+                      className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold border border-slate-200 mr-1"
+                      title="Catégorie de base : non modifiable et non supprimable (l'ordre reste modifiable)"
+                    >
+                      🔒 Verrouillé
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={() => handleMoveToTop(globalIndex)}
@@ -619,6 +628,8 @@ export const AdminTableau2Section: React.FC<AdminTableau2SectionProps> = ({
                     <ChevronDown className="w-4 h-4" />
                   </button>
 
+                  {!opt.locked && (
+                  <>
                   <div className="w-px h-4 bg-slate-200 mx-1" />
 
                   <button
@@ -638,6 +649,8 @@ export const AdminTableau2Section: React.FC<AdminTableau2SectionProps> = ({
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
+                  </>
+                  )}
                 </div>
               </div>
             );

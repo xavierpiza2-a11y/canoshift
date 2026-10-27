@@ -34,7 +34,8 @@ fi
 
 # 3. Création du dossier de données persistantes
 mkdir -p "$APP_DIR/data/stores"
-chmod -R 777 "$APP_DIR/data"
+chown -R 1000:1000 "$APP_DIR/data" 2>/dev/null || sudo chown -R 1000:1000 "$APP_DIR/data" 2>/dev/null || true
+chmod -R u=rwX,g=rX,o= "$APP_DIR/data" 2>/dev/null || sudo chmod -R u=rwX,g=rX,o= "$APP_DIR/data" 2>/dev/null || true
 
 # 4. Configuration du fichier d'environnement (.env)
 if [ ! -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/.env.example" ]; then

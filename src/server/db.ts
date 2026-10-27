@@ -10,6 +10,8 @@ import {
   DEFAULT_API_TOKEN,
   DEFAULT_ADMIN_PIN,
 } from '../config/constants.ts';
+import { coreShiftHours, getMonthDateKeys, generateDefaultDay } from '../shared/planning.ts';
+import { ensureCoreConfig } from '../shared/coreConfig.ts';
 
 export interface StoreInfo {
   id: string;
@@ -294,6 +296,14 @@ export async function initDatabase(): Promise<{
       }
     }
 
+    // Migration : les 6 catégories de base sont ajoutées/verrouillées sans toucher aux personnalisées ni aux journées
+    for (const store of storesRegistry) {
+      const loaded = storeDatabases.get(store.id);
+      if (loaded && applyCoreConfig(loaded)) {
+        saveStoreDataFile(store.id);
+      }
+    }
+
     console.log(`Autonomous multi-store database initialized. Loaded ${storesRegistry.length} store(s).`);
     return {
       type: 'local',
@@ -353,6 +363,12 @@ export async function dbCreateStore(name: string, token: string, adminPin = DEFA
   const newState = createDefaultState(cleanName, cleanToken, cleanPin);
   storeDatabases.set(storeId, newState);
   storesRegistry.push(newStore);
+
+  // Planning initial du/des salarié(s) de départ pour tous les mois de l'exercice
+  const initialEmployees = (newState.config.employees || []).map((e) => e.name);
+  for (const m of (newState.config.allMonths || []).map((x) => x.key)) {
+    generateMonthDays(newState, m, initialEmployees);
+  }
 
   saveStoresRegistryFile();
   saveStoreDataFile(storeId);
@@ -504,6 +520,10 @@ export async function dbSaveConfig(storeId: string, partialConfig: Partial<Serve
     ...partialConfig,
   };
 
+  // Les 6 catégories de base sont verrouillées : leur définition officielle est toujours rétablie,
+  // les catégories personnalisées sont conservées.
+  applyCoreConfig(db);
+
   // Sync token or adminPin with store registry if changed
   const store = storesRegistry.find((s) => s.id === storeId);
   if (store) {
@@ -517,6 +537,143 @@ export async function dbSaveConfig(storeId: string, partialConfig: Partial<Serve
   return db.config;
 }
 
+export interface GenerationSummary {
+  createdDays: number;
+  months: string[];
+  employees: string[];
+}
+
+/**
+ * Enregistre la config puis génère les journées manquantes pour :
+ *  - les NOUVEAUX salariés, sur TOUS les mois configurés (exercice complet) ;
+ *  - les NOUVEAUX mois, pour tous les salariés.
+ * Ne remplace jamais une journée existante.
+ */
+export async function dbSaveConfigAndGenerate(
+  storeId: string,
+  partialConfig: Partial<ServerConfig>
+): Promise<{ config: ServerConfig; generation: GenerationSummary }> {
+  const db = getStoreDb(storeId);
+  const prevEmployees = new Set((db.config.employees || []).map((e) => e.name));
+  const prevMonths = new Set((db.config.allMonths || []).map((m) => m.key));
+
+  const config = await dbSaveConfig(storeId, partialConfig);
+
+  const allEmployees = (config.employees || []).map((e) => e.name);
+  const allMonthKeys = (config.allMonths || []).map((m) => m.key);
+  const newEmployees = allEmployees.filter((n) => !prevEmployees.has(n));
+  const newMonths = allMonthKeys.filter((k) => !prevMonths.has(k));
+
+  const summary: GenerationSummary = { createdDays: 0, months: [], employees: [] };
+  const touchedMonths = new Set<string>();
+  const touchedEmployees = new Set<string>();
+
+  if (newEmployees.length > 0) {
+    // Exercice complet : tous les mois configurés, passés et futurs (BASE/REPOS/FERIE = heures neutres pour les soldes)
+    for (const m of allMonthKeys) {
+      const n = generateMonthDays(db, m, newEmployees);
+      if (n > 0) {
+        summary.createdDays += n;
+        touchedMonths.add(m);
+        newEmployees.forEach((e) => touchedEmployees.add(e));
+      }
+    }
+  }
+  if (newMonths.length > 0) {
+    for (const m of newMonths) {
+      const n = generateMonthDays(db, m, allEmployees);
+      if (n > 0) {
+        summary.createdDays += n;
+        touchedMonths.add(m);
+        allEmployees.forEach((e) => touchedEmployees.add(e));
+      }
+    }
+  }
+
+  if (summary.createdDays > 0) saveStoreDataFile(storeId);
+  summary.months = [...touchedMonths].sort();
+  summary.employees = [...touchedEmployees];
+  return { config, generation: summary };
+}
+
+/** Génération explicite (reprise après incident) : ne crée que les journées absentes. */
+export async function dbEnsureSchedules(
+  storeId: string,
+  options: { monthKeys?: string[]; employeeNames?: string[] } = {}
+): Promise<GenerationSummary> {
+  const db = getStoreDb(storeId);
+  const allEmployees = (db.config.employees || []).map((e) => e.name);
+  const employees = (options.employeeNames?.length ? options.employeeNames : allEmployees).filter((n) =>
+    allEmployees.includes(n)
+  );
+  // Par défaut : tous les mois configurés (exercice complet)
+  const months = options.monthKeys?.length
+    ? options.monthKeys.filter((k) => /^\d{4}-(0[1-9]|1[0-2])$/.test(k))
+    : (db.config.allMonths || []).map((m) => m.key);
+
+  const summary: GenerationSummary = { createdDays: 0, months: [], employees: [] };
+  const touchedEmployees = new Set<string>();
+  for (const m of months) {
+    const n = generateMonthDays(db, m, employees);
+    if (n > 0) {
+      summary.createdDays += n;
+      summary.months.push(m);
+      employees.forEach((e) => touchedEmployees.add(e));
+    }
+  }
+  if (summary.createdDays > 0) saveStoreDataFile(storeId);
+  summary.employees = [...touchedEmployees];
+  return summary;
+}
+
+/**
+ * Crée les journées ABSENTES d'un mois pour les salariés donnés
+ * (férié -> FERIE, week-end -> REPOS, sinon BASE). Idempotent, synchrone (pas de doublon possible),
+ * ne modifie jamais une journée déjà présente. Retourne le nombre de journées créées.
+ */
+function generateMonthDays(db: DatabaseState, monthKey: string, employeeNames: string[]): number {
+  const dateKeys = getMonthDateKeys(monthKey);
+  if (dateKeys.length === 0) return 0;
+  if (!db.schedules[monthKey]) db.schedules[monthKey] = {};
+
+  let created = 0;
+  for (const name of employeeNames) {
+    let sched = db.schedules[monthKey][name];
+    if (!sched) {
+      sched = { employee: name, month: monthKey, days: {}, totalHours: 0 };
+    }
+    if (!sched.days) sched.days = {};
+
+    let added = 0;
+    for (const dk of dateKeys) {
+      if (!Object.prototype.hasOwnProperty.call(sched.days, dk)) {
+        sched.days[dk] = generateDefaultDay(dk);
+        added++;
+      }
+    }
+    if (added > 0 || !db.schedules[monthKey][name]) {
+      let total = 0;
+      for (const day of Object.values(sched.days)) {
+        total += calculateShiftDurationHours(day.shift, day.hours, db.config.tableau2Shifts);
+      }
+      sched.totalHours = Math.round(total * 100) / 100;
+      db.schedules[monthKey][name] = sched;
+    }
+    created += added;
+  }
+  return created;
+}
+
+/** Applique la définition officielle des catégories de base. Retourne true si la config a changé. */
+function applyCoreConfig(db: DatabaseState): boolean {
+  const result = ensureCoreConfig(db.config);
+  if (result.changed) {
+    db.config.categories = result.categories;
+    db.config.tableau2Shifts = result.tableau2Shifts;
+  }
+  return result.changed;
+}
+
 export async function dbGetMonthSchedules(
   storeId: string,
   monthKey: string
@@ -525,12 +682,16 @@ export async function dbGetMonthSchedules(
   return db.schedules[monthKey] || {};
 }
 
-function calculateShiftDurationHours(
+export function calculateShiftDurationHours(
   shiftText: string,
   hoursText?: string,
   tableau2Options: any[] = []
 ): number {
   if (!shiftText && !hoursText) return 0;
+
+  // Catégories de base : BASE = 7 h ; REPOS, RTT, FERIE, CFA, CONGES = 0 h (règle partagée avec le client)
+  const coreHours = coreShiftHours(shiftText);
+  if (coreHours !== null) return coreHours;
 
   const s = (shiftText || '').trim().toUpperCase();
   const h = (hoursText || '').trim();
@@ -628,16 +789,27 @@ export async function dbSaveMonthSchedules(
 ): Promise<void> {
   const db = getStoreDb(storeId);
   for (const sched of Object.values(teamSchedules)) {
-    if (!sched.totalHours || sched.totalHours === 0) {
+    // Le serveur est la référence : le total est recalculé à chaque enregistrement
+    // (un planning sans journées, issu d'un import, conserve le total fourni).
+    if (sched.days && Object.keys(sched.days).length > 0) {
       let tot = 0;
-      if (sched.days) {
-        for (const day of Object.values(sched.days)) {
-          tot += calculateShiftDurationHours(day.shift, day.hours, db.config.tableau2Shifts);
-        }
+      for (const day of Object.values(sched.days)) {
+        tot += calculateShiftDurationHours(day.shift, day.hours, db.config.tableau2Shifts);
       }
       sched.totalHours = Math.round(tot * 100) / 100;
     }
   }
+
+  // Ne jamais perdre le planning d'un salarié encore actif absent de l'envoi
+  // (ex. appareil pas encore synchronisé après un ajout/génération).
+  const existing = db.schedules[monthKey] || {};
+  const activeNames = new Set((db.config.employees || []).map((e) => e.name));
+  for (const [name, sched] of Object.entries(existing)) {
+    if (!teamSchedules[name] && activeNames.has(name)) {
+      teamSchedules[name] = sched;
+    }
+  }
+
   db.schedules[monthKey] = teamSchedules;
   saveStoreDataFile(storeId);
 }
@@ -855,6 +1027,10 @@ export async function dbResetToCleanStore(storeId: string): Promise<ServerConfig
   const adminPin = store ? store.adminPin : DEFAULT_ADMIN_PIN;
 
   const freshState = createDefaultState(storeName, token, adminPin);
+  const freshEmployees = (freshState.config.employees || []).map((e) => e.name);
+  for (const m of (freshState.config.allMonths || []).map((x) => x.key)) {
+    generateMonthDays(freshState, m, freshEmployees);
+  }
   storeDatabases.set(storeId, freshState);
   saveStoreDataFile(storeId);
 
@@ -883,6 +1059,7 @@ export async function dbRestoreBackup(storeId: string, backup: Partial<DatabaseS
       history: backup.history || {},
     };
 
+    applyCoreConfig(updatedState);
     storeDatabases.set(storeId, updatedState);
     saveStoreDataFile(storeId);
     return updatedState.config;

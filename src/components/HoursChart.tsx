@@ -1,3 +1,4 @@
+import { coreShiftHours } from '../shared/planning';
 import React, { useState, useMemo } from 'react';
 import {
   ResponsiveContainer,
@@ -41,10 +42,12 @@ interface HoursChartProps {
  */
 export function parseHoursFromDay(shiftText: string, hoursText?: string): number {
   if (!shiftText && !hoursText) return 0;
+  const coreHours = coreShiftHours(shiftText);
+  if (coreHours !== null) return coreHours;
   const cat = categorizeShift(shiftText, hoursText);
   const sUpper = (shiftText || '').trim().toUpperCase();
 
-  if (cat === 'REPOS' || cat === 'CONGES' || cat === 'RTT' || cat === 'FERIE') {
+  if (cat === 'REPOS' || cat === 'CONGES' || cat === 'RTT' || cat === 'FERIE' || cat === 'CFA') {
     return 0;
   }
 

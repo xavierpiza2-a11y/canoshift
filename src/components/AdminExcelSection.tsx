@@ -11,7 +11,8 @@ import {
   parsePlanningFromXLSX,
   ParsedExcelPlanning,
 } from '../services/excelService';
-import { saveLocalTeamPlanning, getStoredDayNotes, saveStoredDayNotes, getStoreName } from '../services/api';
+import { saveLocalTeamPlanning, getStoredDayNotes, saveStoredDayNotes, getStoreName, fetchTeamPlanning } from '../services/api';
+import { exportTeamPlanningToPDF } from '../services/pdfExport';
 import { broadcastSync } from '../services/syncBroadcast';
 import {
   FileSpreadsheet,
@@ -27,6 +28,7 @@ import {
   Info,
   ArrowRight,
   RefreshCw,
+  Printer,
 } from 'lucide-react';
 
 interface AdminExcelSectionProps {
@@ -94,12 +96,15 @@ export const AdminExcelSection: React.FC<AdminExcelSectionProps> = ({
     try {
       const effectiveStore = (storeName || getStoreName()).trim();
       const cleanStore = effectiveStore.replace(/[^a-zA-Z0-9]/g, '_');
+      // Le planning du MOIS CHOISI est chargé depuis le serveur (pas celui du mois affiché dans l'application),
+      // pour tous les salariés, responsable compris.
+      const { teamSchedules: monthSchedules } = await fetchTeamPlanning(targetMonth, employees);
       const existingNotes = getStoredDayNotes(targetMonth);
       const data = await generatePlanningTemplateXLSX(
         targetMonth,
         employees,
         tableau2Options,
-        teamSchedules,
+        monthSchedules,
         existingNotes,
         effectiveStore
       );
@@ -110,6 +115,26 @@ export const AdminExcelSection: React.FC<AdminExcelSectionProps> = ({
         type: 'error',
         text: `Erreur lors de l'export du planning : ${err.message}`,
       });
+    }
+  };
+
+  // Impression PDF du planning du mois choisi (tous les salariés)
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const handleDownloadPDF = async () => {
+    setIsExportingPdf(true);
+    try {
+      const { teamSchedules: monthSchedules } = await fetchTeamPlanning(targetMonth, employees);
+      const monthObj = allMonths.find((m) => m.key === targetMonth);
+      await exportTeamPlanningToPDF({
+        monthKey: targetMonth,
+        monthLabel: monthObj?.label || targetMonth,
+        employees,
+        teamSchedules: monthSchedules,
+      });
+    } catch (err: any) {
+      setImportStatus({ type: 'error', text: `Erreur lors de l'export PDF : ${err.message}` });
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -325,7 +350,17 @@ export const AdminExcelSection: React.FC<AdminExcelSectionProps> = ({
               className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs border border-slate-200 transition-colors"
             >
               <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
-              Exporter le planning actuel avec les heures (.xlsx)
+              Exporter le planning du mois avec les heures (.xlsx)
+            </button>
+
+            <button
+              type="button"
+              onClick={handleDownloadPDF}
+              disabled={isExportingPdf}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-semibold transition-colors disabled:opacity-60"
+            >
+              <Printer className="w-4 h-4 text-emerald-700" />
+              {isExportingPdf ? 'Génération…' : 'Imprimer le planning du mois (PDF)'}
             </button>
           </div>
         </div>

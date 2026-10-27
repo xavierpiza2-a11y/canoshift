@@ -1,3 +1,4 @@
+import { coreShiftHours } from '../shared/planning';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import {
@@ -34,13 +35,15 @@ export function calculateHours(
   tableau2Options: Tableau2ShiftOption[] = DEFAULT_TABLEAU2_SHIFTS
 ): number {
   if (!shiftText && !hoursText) return 0;
+  const coreHours = coreShiftHours(shiftText);
+  if (coreHours !== null) return coreHours;
 
   const s = (shiftText || '').trim().toUpperCase();
   const h = (hoursText || '').trim();
 
   // Check category
   const cat = categorizeShift(s, h);
-  if (cat === 'REPOS' || cat === 'CONGES' || cat === 'RTT' || cat === 'FERIE') {
+  if (cat === 'REPOS' || cat === 'CONGES' || cat === 'RTT' || cat === 'FERIE' || cat === 'CFA') {
     return 0;
   }
 
@@ -228,6 +231,56 @@ export async function generatePlanningTemplateXLSX(
   const wsCreneaux = workbook.addWorksheet('Créneaux');
   wsCreneaux.views = [{ showGridLines: true }];
 
+  // ----- Préparation : libellés uniques + texte exact de chaque case -----------------------------------
+  // (une formule SUMIF additionne tous les doublons : chaque libellé ne doit apparaître qu'une fois)
+  const sheetOptions: Tableau2ShiftOption[] = [];
+  const seenLabels = new Set<string>();
+  for (const opt of tableau2Options) {
+    if (seenLabels.has(opt.label)) continue;
+    seenLabels.add(opt.label);
+    sheetOptions.push(opt);
+  }
+  const dropdownCount = sheetOptions.length;
+
+  // Créneaux réellement utilisés mais absents de la liste (horaires particuliers) : ajoutés à la fin de la
+  // feuille Créneaux, pour que le total reste exact et que rien ne soit perdu à la réimportation.
+  const extraRows: { text: string; shift: string; hours: string; dec: number }[] = [];
+  const resolveCellText = (item: { shift?: string; hours?: string }): string => {
+    const sh = (item.shift || '').trim();
+    const hr = (item.hours || '').trim();
+    if (!sh && !hr) return '';
+    const exact = sheetOptions.find((o) => o.shift === sh && (o.hours || '') === hr);
+    if (exact) return exact.label;
+    if (sh && coreShiftHours(sh) !== null) {
+      const core = sheetOptions.find((o) => o.shift === sh);
+      if (core) return core.label;
+    }
+    if (sh && !hr) {
+      const byShift = sheetOptions.find((o) => o.label === sh || o.shift === sh);
+      if (byShift) return byShift.label;
+    }
+    const text = sh && hr ? `${sh} · ${hr}` : sh || hr;
+    if (!extraRows.some((x) => x.text === text) && !seenLabels.has(text)) {
+      extraRows.push({ text, shift: sh, hours: hr, dec: calculateHours(sh || 'HORAIRE', hr, tableau2Options) });
+    }
+    return text;
+  };
+
+  const cellTexts: Record<string, Record<string, string>> = {};
+  if (existingSchedules) {
+    for (const emp of employees) {
+      const days = existingSchedules[emp.name]?.days;
+      if (!days) continue;
+      cellTexts[emp.name] = {};
+      for (const [dk, item] of Object.entries(days)) {
+        cellTexts[emp.name][dk] = resolveCellText(item as any);
+      }
+    }
+  }
+  const labelHours = new Map<string, number>();
+  sheetOptions.forEach((o) => labelHours.set(o.label, o.hoursDecimal ?? calculateHours(o.shift, o.hours, tableau2Options)));
+  extraRows.forEach((x) => labelHours.set(x.text, x.dec));
+
   // Populate Créneaux sheet
   const titleRowCreneaux = wsCreneaux.addRow([
     `CRÉNEAUX & HORAIRES POSSIBLES (${effectiveStore.toUpperCase()})`,
@@ -254,7 +307,7 @@ export async function generatePlanningTemplateXLSX(
     fgColor: { argb: 'FFE2E8F0' },
   };
 
-  tableau2Options.forEach((opt) => {
+  sheetOptions.forEach((opt) => {
     const hoursDec =
       opt.hoursDecimal ?? calculateHours(opt.shift, opt.hours, tableau2Options);
     wsCreneaux.addRow([
@@ -265,6 +318,9 @@ export async function generatePlanningTemplateXLSX(
       opt.label,
       opt.description || '',
     ]);
+  });
+  extraRows.forEach((x) => {
+    wsCreneaux.addRow([x.shift || '—', x.hours || '—', x.dec, 'PARTICULIER', x.text, 'Horaire particulier utilisé dans ce planning']);
   });
 
   wsCreneaux.getColumn(1).width = 16;
@@ -296,9 +352,11 @@ export async function generatePlanningTemplateXLSX(
     fgColor: { argb: 'FF166534' },
   };
 
-  const creneauxRowCount = tableau2Options.length;
-  // Formula referencing column E (Libellé Recommandé) of sheet 'Créneaux'
-  const validationFormula = `'Créneaux'!$E$4:$E$${3 + creneauxRowCount}`;
+  // Liste déroulante : créneaux définis ; formules de total : créneaux définis + horaires particuliers
+  const validationFormula = `'Créneaux'!$E$4:$E$${3 + dropdownCount}`;
+  const lookupLast = 3 + dropdownCount + extraRows.length;
+  const labelRange = `'Créneaux'!$E$4:$E$${lookupLast}`;
+  const hoursRange = `'Créneaux'!$C$4:$C$${lookupLast}`;
 
   // Add rows for each day of the month
   for (let d = 1; d <= daysInMonth; d++) {
@@ -313,26 +371,7 @@ export async function generatePlanningTemplateXLSX(
 
     // For each employee column
     for (const emp of employees) {
-      if (existingSchedules && existingSchedules[emp.name]?.days?.[dateKey]) {
-        const item = existingSchedules[emp.name].days[dateKey];
-        const matchingOpt = tableau2Options.find(
-          (o) =>
-            o.label === item.shift ||
-            o.shift === item.shift ||
-            (o.shift === item.shift && o.hours === item.hours)
-        );
-        if (matchingOpt) {
-          rowValues.push(matchingOpt.label);
-        } else if (item.shift && item.hours) {
-          rowValues.push(`${item.shift} · ${item.hours}`);
-        } else if (item.shift) {
-          rowValues.push(item.shift);
-        } else {
-          rowValues.push(item.hours || '');
-        }
-      } else {
-        rowValues.push('');
-      }
+      rowValues.push(cellTexts[emp.name]?.[dateKey] ?? '');
     }
 
     // Rightmost column: Information / Événement for this day
@@ -375,18 +414,22 @@ export async function generatePlanningTemplateXLSX(
     }
   }
 
-  // Summary Row: Total Hours
-  const totalRowValues: any[] = ['TOTAL HEURES', 'Total calculé du mois'];
-  for (const emp of employees) {
-    if (existingSchedules && existingSchedules[emp.name]) {
-      const tot = existingSchedules[emp.name].totalHours || 0;
-      totalRowValues.push(tot > 0 ? `${tot}h` : '0h');
-    } else {
-      totalRowValues.push('');
-    }
-  }
-  totalRowValues.push(''); // for the Informations column
-  const totalRow = wsPlanning.addRow(totalRowValues);
+  // Summary Row: Total Hours — formules Excel (recalculées à chaque changement de créneau) avec valeur déjà calculée
+  const firstDayRow = 3; // ligne 1 : titre, ligne 2 : en-têtes
+  const lastDayRow = 2 + daysInMonth;
+  const totalRow = wsPlanning.addRow(['TOTAL HEURES', 'Total calculé du mois']);
+  employees.forEach((emp, idx) => {
+    const colLetter = wsPlanning.getColumn(3 + idx).letter;
+    let cached = 0;
+    for (const txt of Object.values(cellTexts[emp.name] || {})) cached += labelHours.get(txt) ?? 0;
+    const cell = totalRow.getCell(3 + idx);
+    cell.value = {
+      formula: `SUMPRODUCT(SUMIF(${labelRange},${colLetter}${firstDayRow}:${colLetter}${lastDayRow},${hoursRange}))`,
+      result: Math.round(cached * 100) / 100,
+    };
+    cell.numFmt = '0.##"h"';
+    cell.alignment = { horizontal: 'center' };
+  });
   totalRow.font = { bold: true };
   totalRow.fill = {
     type: 'pattern',

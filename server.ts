@@ -16,6 +16,8 @@ import {
   dbGetStoreStats,
   dbGetConfig,
   dbSaveConfig,
+  dbSaveConfigAndGenerate,
+  dbEnsureSchedules,
   dbGetAllSchedules,
   dbGetMonthSchedules,
   dbSaveMonthSchedules,
@@ -510,6 +512,22 @@ app.get('/api/superadmin/backup-all', async (req, res) => {
 // ---------------------------------------------------------------------------
 app.use('/api', requireStore, bigJson);
 
+// Génération explicite des journées absentes (reprise après incident) : n'écrase jamais l'existant
+app.post('/api/planning/generate', requireAdmin, async (req, res) => {
+  try {
+    const storeId = resolveStoreId(req);
+    const monthKeys = Array.isArray(req.body?.monthKeys) ? req.body.monthKeys.map(String) : undefined;
+    const employeeNames = Array.isArray(req.body?.employeeNames) ? req.body.employeeNames.map(String) : undefined;
+    const summary = await dbEnsureSchedules(storeId, { monthKeys, employeeNames });
+    if (summary.createdDays > 0) {
+      broadcast({ type: 'SCHEDULES_GENERATED', storeId, months: summary.months, employees: summary.employees });
+    }
+    res.json({ success: true, ...summary });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 1. Config
 app.get('/api/config', async (req, res) => {
   try {
@@ -527,12 +545,15 @@ app.post('/api/config', requireAdmin, async (req, res) => {
     const beforeStore = dbGetStoreById(storeId);
     const prevToken = beforeStore?.token;
     const prevPin = beforeStore?.adminPin;
-    const updated = await dbSaveConfig(storeId, req.body);
+    const { config: updated, generation } = await dbSaveConfigAndGenerate(storeId, req.body);
     broadcast({
       type: 'CONFIG_UPDATED',
       storeId,
       config: updated,
     });
+    if (generation.createdDays > 0) {
+      broadcast({ type: 'SCHEDULES_GENERATED', storeId, months: generation.months, employees: generation.employees });
+    }
 
     if (typeof req.body.apiToken === 'string' && req.body.apiToken.trim().toUpperCase() !== prevToken) {
       broadcast({ type: 'TOKEN_CHANGED', storeId });
