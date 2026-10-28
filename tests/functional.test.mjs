@@ -76,12 +76,16 @@ const writes = [
   ['POST', '/api/notes/2026-11', { notes: { '2026-11-03': 'x' } }],
   ['DELETE', '/api/months/2026-11'],
   ['DELETE', '/api/history'],
-  ['POST', '/api/reset'],
-  ['GET', '/api/backup'],
 ];
 for (const [m, p, b] of writes) {
   const r = await call(m, p, { headers: SA_A, body: b });
   t(`Sans PIN admin : ${m} ${p} refusé`, r.status === 403 && r.json?.code === 'ADMIN_REQUIRED', `HTTP ${r.status}`);
+}
+
+// Les anciennes routes admin de remise à zéro / sauvegarde n'existent plus
+for (const [m, p] of [['POST', '/api/reset']]) {
+  const rr = await call(m, p, { headers: SA_A });
+  t(`route supprimée : ${m} ${p} ne répond plus par une action`, rr.status !== 200 || !rr.json?.success);
 }
 
 // ---- 4. PIN admin
@@ -112,10 +116,10 @@ t('Temps réel : l\'AUTRE magasin ne reçoit rien', ws2.msgs.filter((m) => m.typ
 t('Diffusions sans PIN ni clé', !ws1.msgs.some((m) => /adminPin|apiToken|123456|CLEA-FONC/.test(JSON.stringify(m))));
 
 // Sauvegarde / restauration par l'admin
-const bk = await call('GET', '/api/backup', { headers: ADM_A });
-t('Admin : export de sauvegarde', bk.status === 200 && bk.json);
-r = await call('POST', '/api/backup', { headers: ADM_A, body: bk.json });
-t('Admin : restauration de la sauvegarde', r.status === 200 && !/adminPin|apiToken/.test(r.text));
+const bk = await sa('GET', `/api/superadmin/stores/${A.id}/backup`);
+t('Gestionnaire : export de sauvegarde du magasin', bk.status === 200 && bk.json);
+r = await sa('POST', `/api/superadmin/stores/${A.id}/restore`, bk.json);
+t('Gestionnaire : restauration de la sauvegarde', r.status === 200 && !/adminPin|apiToken/.test(r.text));
 const stillPin = await call('POST', '/api/verify-pin', { headers: SA_A, body: { pin: '123456' } });
 t('Le PIN n\'a pas été modifié par la restauration', stillPin.json?.valid === true);
 

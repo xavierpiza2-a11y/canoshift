@@ -4,10 +4,8 @@ import ExcelJS from 'exceljs';
 import {
   Employee,
   EmployeeMonthSchedule,
-  MonthItem,
   Tableau2ShiftOption,
-  DayShift,
-  ShiftCategory,
+  ShiftCategory
 } from '../types/planning';
 import { categorizeShift, DEFAULT_TABLEAU2_SHIFTS } from '../config/constants';
 import { getStoreName } from './api';
@@ -474,7 +472,7 @@ export function downloadExcelFile(data: Uint8Array, fileName: string) {
  */
 export async function parsePlanningFromXLSX(
   file: File | ArrayBuffer,
-  knownEmployees: Employee[],
+  _knownEmployees: Employee[],
   tableau2Options: Tableau2ShiftOption[] = DEFAULT_TABLEAU2_SHIFTS
 ): Promise<ParsedExcelPlanning> {
   const buffer = file instanceof File ? await file.arrayBuffer() : file;

@@ -1,18 +1,16 @@
 import React, { useState } from 'react';
 import { verifyApiTokenWithStore, setApiToken, setActiveStore } from '../services/api';
-import { KeyRound, ShieldCheck, ArrowRight, AlertCircle, Eye, EyeOff, Lock, Store, Sun, Moon } from 'lucide-react';
+import { KeyRound, ShieldCheck, ArrowRight, AlertCircle, Eye, EyeOff, Lock, Sun, Moon } from 'lucide-react';
 import { SuperAdminModal } from './SuperAdminModal';
 import { AppLogo } from './AppLogo';
-import { BrandFooter } from './BrandFooter';
 import { useTheme } from '../hooks/useTheme';
 
 interface TokenGateProps {
-  storeName?: string;
   infoMessage?: string;
   onTokenSuccess: (token: string, store?: { id: string; name: string; token: string }) => void;
 }
 
-export const TokenGate: React.FC<TokenGateProps> = ({ storeName, infoMessage, onTokenSuccess }) => {
+export const TokenGate: React.FC<TokenGateProps> = ({ infoMessage, onTokenSuccess }) => {
   const [tokenInput, setTokenInput] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');

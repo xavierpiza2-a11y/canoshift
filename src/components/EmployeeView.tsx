@@ -15,23 +15,17 @@ import {
   History,
   Clock,
   Briefcase,
-  Home,
-  Sparkles,
   Info,
   CalendarCheck,
   RefreshCw,
-  Sun,
-  Sunset,
   Palmtree,
-  GraduationCap,
-  Scale,
+  Scale
 } from 'lucide-react';
 
 interface EmployeeViewProps {
   currentEmployee: Employee;
   schedule: EmployeeMonthSchedule | null;
   isLoading: boolean;
-  isOffline: boolean;
   selectedMonth: string;
   allMonths: MonthItem[];
   visibleMonths: string[];
@@ -44,7 +38,6 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
   currentEmployee,
   schedule,
   isLoading,
-  isOffline,
   selectedMonth,
   allMonths,
   visibleMonths,
@@ -75,10 +68,6 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
   );
 
   // Month label
-  const currentMonthItem = useMemo(() => {
-    return allMonths.find((m) => m.key === selectedMonth);
-  }, [allMonths, selectedMonth]);
-  const monthLabel = currentMonthItem?.label || selectedMonth;
 
   // Today in YYYY-MM-DD
   const todayStr = useMemo(() => {

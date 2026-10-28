@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChangeEntry } from '../types/planning';
-import { Bell, Check, X, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Check, X, AlertTriangle, ArrowRight } from 'lucide-react';
 import { formatHoursReadable } from '../config/constants';
 
 interface ChangesModalProps {

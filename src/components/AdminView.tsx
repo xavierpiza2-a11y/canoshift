@@ -3,124 +3,53 @@ import {
   Employee,
   MonthItem,
   Tableau2ShiftOption,
-  EmployeeMonthSchedule,
   ContractType,
-  HistoryEntry,
+  HistoryEntry
 } from '../types/planning';
 import {
-  DEFAULT_ADMIN_PIN,
-  DEFAULT_API_TOKEN,
-  DEFAULT_TABLEAU2_SHIFTS,
-  DEFAULT_STORE_NAME,
-  DEFAULT_EMPLOYEES,
-} from '../config/constants';
-import {
-  getApiToken,
-  setApiToken,
-  saveApiToken,
-  getStoredAdminPin,
-  setStoredAdminPin,
   saveAdminPin,
   verifyAdminPin,
   saveEmployees,
   saveVisibleMonths,
   saveAllMonths,
   deleteMonthData,
-  getCalendarDaysForMonth,
   fetchAvailableShifts,
   getStoredTableau2Shifts,
   renameEmployeeData,
   ensureResponsableAdmin,
-  saveStoreName,
-  getStoreName,
-  resetToCleanStore,
-  getStoredDayNotes,
   fetchAllHistory,
   deleteAllHistory,
-  deleteEmployeeHistory,
+  deleteEmployeeHistory
 } from '../services/api';
-import { exportTeamPlanningToPDF } from '../services/pdfExport';
-import { getMonthWorkingCalendar } from '../services/hoursService';
-import { getExerciseMonthItems, getExerciseStartYear, getCurrentExerciseStartYear } from '../shared/planning';
 import { AdminExcelSection } from './AdminExcelSection';
+import { AdminExercisesSection } from './AdminExercisesSection';
 import { AdminTableau2Section } from './AdminTableau2Section';
-import { AdminDatabaseSection } from './AdminDatabaseSection';
 import {
   ShieldCheck,
   ShieldAlert,
-  KeyRound,
-  Scale,
   Users,
   Calendar,
-  Settings,
-  Code2,
   Trash2,
   Plus,
   RefreshCw,
   Check,
-  Copy,
-  Activity,
   ArrowUp,
   ArrowDown,
   Lock,
   LockKeyhole,
   Edit3,
   FileSpreadsheet,
-  Sun,
-  Sunset,
-  Briefcase,
-  Home,
-  GraduationCap,
   Sparkles,
   AlertTriangle,
   X,
-  CalendarDays,
   CheckCircle2,
-  Info,
   History,
-  Search,
-  Filter,
+  Search
 } from 'lucide-react';
 
-export { getStoredAdminPin, setStoredAdminPin };
 
 // Helpers for Month formatting & calendar metadata
-export const getFrenchMonthLabel = (key: string): string => {
-  const [yStr, mStr] = (key || '').split('-');
-  const y = parseInt(yStr, 10);
-  const m = parseInt(mStr, 10);
-  if (isNaN(y) || isNaN(m) || m < 1 || m > 12) return key;
-  const d = new Date(y, m - 1, 1);
-  const monthName = d.toLocaleDateString('fr-FR', { month: 'long' });
-  const capitalized = monthName.charAt(0).toUpperCase() + monthName.slice(1);
-  return `${capitalized} ${y}`;
-};
-
-export const getExcelTabLabel = (key: string): string => {
-  const [yStr, mStr] = (key || '').split('-');
-  const y = parseInt(yStr, 10);
-  const m = parseInt(mStr, 10);
-  if (isNaN(y) || isNaN(m) || m < 1 || m > 12) return key;
-  const d = new Date(y, m - 1, 1);
-  const monthName = d.toLocaleDateString('fr-FR', { month: 'long' }).toUpperCase();
-  const shortYear = String(y).slice(-2);
-  return `${monthName} ${shortYear}`;
-};
-
-export const getMonthCalendarSummary = (key: string): string => {
-  const [yStr, mStr] = (key || '').split('-');
-  const y = parseInt(yStr, 10);
-  const m = parseInt(mStr, 10);
-  if (isNaN(y) || isNaN(m) || m < 1 || m > 12) return '';
-  const daysInMonth = new Date(y, m, 0).getDate();
-  const firstDay = new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { weekday: 'long' });
-  const lastDay = new Date(y, m - 1, daysInMonth).toLocaleDateString('fr-FR', { weekday: 'long' });
-  return `${daysInMonth} jours (du ${firstDay} 1er au ${lastDay} ${daysInMonth})`;
-};
-
 interface AdminViewProps {
-  storeName?: string;
-  onUpdateStoreName?: (name: string) => void;
   currentEmployee?: Employee | null;
   employees: Employee[];
   allMonths: MonthItem[];
@@ -131,7 +60,6 @@ interface AdminViewProps {
   onUpdateEmployees: (employees: Employee[]) => void;
   onUpdateVisibleMonths: (months: string[]) => void;
   onUpdateAllMonths?: (months: MonthItem[]) => void;
-  onSwitchToProfile?: (emp: Employee) => void;
   onPlanningImported?: (
     monthKey: string,
     teamSchedules: Record<string, any>,
@@ -141,19 +69,15 @@ interface AdminViewProps {
 }
 
 export const AdminView: React.FC<AdminViewProps> = ({
-  storeName,
-  onUpdateStoreName,
   currentEmployee,
   employees,
   allMonths,
   visibleMonths,
-  teamSchedules,
   isAdminActive,
   onSetAdminActive,
   onUpdateEmployees,
   onUpdateVisibleMonths,
   onUpdateAllMonths,
-  onSwitchToProfile,
   onPlanningImported,
   onBackToPlanning,
 }) => {
@@ -187,30 +111,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setTimeout(() => setAdminToast(null), 3500);
   };
 
-  // Store Reset modal state
-  const [isResetStoreModalOpen, setIsResetStoreModalOpen] = useState(false);
-  const [resetStoreInput, setResetStoreInput] = useState('');
-
-  const handleConfirmResetStore = () => {
-    const finalName = resetStoreInput.trim() || storeName || DEFAULT_STORE_NAME;
-    resetToCleanStore(finalName);
-    onUpdateStoreName?.(finalName);
-    setTeamList(DEFAULT_EMPLOYEES);
-    onUpdateEmployees(DEFAULT_EMPLOYEES);
-    setIsResetStoreModalOpen(false);
-    setResetStoreInput('');
-    showToast('success', `Application réinitialisée pour « ${finalName} ». Données vierges prêtes !`);
-  };
-
   // Admin PIN Modification State
   const [newAdminPin, setNewAdminPin] = useState('');
   const [confirmAdminPin, setConfirmAdminPin] = useState('');
   const [adminPinSuccess, setAdminPinSuccess] = useState(false);
   const [adminPinError, setAdminPinError] = useState('');
-
-  // Security Token state
-  const [tokenInput, setTokenInput] = useState(getApiToken());
-  const [connectionSuccess, setConnectionSuccess] = useState(false);
 
   // Team management state
   const [teamList, setTeamList] = useState<Employee[]>(employees);
@@ -250,25 +155,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
   // Months management state
   const [monthsList, setMonthsList] = useState<MonthItem[]>(allMonths);
   const [selectedVisibleMonths, setSelectedVisibleMonths] = useState<string[]>(visibleMonths);
-  const [isSavingMonths, setIsSavingMonths] = useState(false);
-  const [monthsSavedSuccess, setMonthsSavedSuccess] = useState(false);
-
-  // New month creation form
-  const [newMonthPickerVal, setNewMonthPickerVal] = useState<string>('2026-11');
-  const [newMonthLabel, setNewMonthLabel] = useState<string>('Novembre 2026');
-  const [newMonthTab, setNewMonthTab] = useState<string>('NOVEMBRE 26');
-
-  // Month modification state
-  const [monthToEdit, setMonthToEdit] = useState<MonthItem | null>(null);
-  const [editMonthKey, setEditMonthKey] = useState<string>('');
-  const [editMonthLabel, setEditMonthLabel] = useState<string>('');
-  const [editMonthTab, setEditMonthTab] = useState<string>('');
-  const [editMonthCustomWorkingDays, setEditMonthCustomWorkingDays] = useState<string>('');
-  const [editMonthCustomBaseHours, setEditMonthCustomBaseHours] = useState<string>('');
-
-  // Month deletion confirmation modal
-  const [monthToDelete, setMonthToDelete] = useState<MonthItem | null>(null);
-
   // Modification History Management State (Option A - 2 Niveaux)
   const [historyRecords, setHistoryRecords] = useState<HistoryEntry[]>([]);
   const [historyTotalCount, setHistoryTotalCount] = useState<number>(0);
@@ -368,7 +254,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setSelectedVisibleMonths(visibleMonths);
   }, [visibleMonths]);
 
-  // Load available shifts & check push permission on auth
+  // Load available shifts on auth
   useEffect(() => {
     if (isAuthenticated) {
       fetchAvailableShifts().then((shifts) => {
@@ -380,14 +266,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
   }, [isAuthenticated]);
 
 
-  // Update default label & tab when month picker value changes
-  const handleMonthPickerChange = (val: string) => {
-    setNewMonthPickerVal(val);
-    if (val && val.includes('-')) {
-      setNewMonthLabel(getFrenchMonthLabel(val));
-      setNewMonthTab(getExcelTabLabel(val));
-    }
-  };
 
   // Numpad key press handler (6-digit PIN)
   const handleKeypadPress = (val: string) => {
@@ -466,15 +344,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setTimeout(() => setAdminPinSuccess(false), 3000);
   };
 
-  // Save Security Token
-  const handleSaveConnection = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanToken = tokenInput.trim();
-    await saveApiToken(cleanToken);
-    setConnectionSuccess(true);
-    showToast('success', 'Jeton d’accès enregistré sur la base de données !');
-    setTimeout(() => setConnectionSuccess(false), 3000);
-  };
 
   // --- TEAM MANAGEMENT HANDLERS ---
   const handleAddEmployee = async (e: React.FormEvent) => {
@@ -659,15 +528,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
     onUpdateEmployees(list);
   };
 
-  const handleUpdateEmployeeColor = async (index: number, newColor: string) => {
-    const list = [...teamList];
-    list[index] = { ...list[index], color: newColor };
-    setTeamList(list);
-
-    // Auto-save
-    await saveEmployees(list);
-    onUpdateEmployees(list);
-  };
 
   const handleSaveTeamToBackend = async () => {
     setIsSavingTeam(true);
@@ -680,195 +540,17 @@ export const AdminView: React.FC<AdminViewProps> = ({
   };
 
   // --- MONTH MANAGEMENT HANDLERS ---
-  const handleToggleMonthVisibility = async (key: string) => {
-    let nextVisible: string[];
-    if (selectedVisibleMonths.includes(key)) {
-      if (selectedVisibleMonths.length <= 1) {
-        showToast('error', 'Au moins un mois doit rester visible dans le planning.');
-        return;
-      }
-      nextVisible = selectedVisibleMonths.filter((m) => m !== key);
-    } else {
-      nextVisible = [...selectedVisibleMonths, key];
+  // Applique une nouvelle liste de mois / mois visibles (gestion par exercice) ; supprime les données des mois retirés
+  const handleApplyExercises = async (all: MonthItem[], visible: string[], deletedMonthKeys: string[] = []) => {
+    setMonthsList(all);
+    setSelectedVisibleMonths(visible);
+    if (deletedMonthKeys.length > 0) {
+      await Promise.all(deletedMonthKeys.map((k) => deleteMonthData(k)));
     }
-
-    setSelectedVisibleMonths(nextVisible);
-    await saveVisibleMonths(nextVisible);
-    onUpdateVisibleMonths(nextVisible);
-  };
-
-  // Add a new Month with calendar days verified
-  const handleAddMonth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const key = newMonthPickerVal.trim();
-    const label = newMonthLabel.trim() || getFrenchMonthLabel(key);
-    const tab = newMonthTab.trim().toUpperCase() || getExcelTabLabel(key);
-
-    if (!key || !key.match(/^\d{4}-\d{2}$/)) {
-      showToast('error', 'Le format du mois doit être AAAA-MM (ex: 2026-11).');
-      return;
-    }
-
-    if (monthsList.some((m) => m.key === key)) {
-      showToast('error', `Le mois « ${key} » existe déjà dans la liste.`);
-      return;
-    }
-
-    const newMonthItem: MonthItem = { key, label, tab };
-    const updatedMonths = [...monthsList, newMonthItem];
-    const updatedVisible = selectedVisibleMonths.includes(key)
-      ? selectedVisibleMonths
-      : [...selectedVisibleMonths, key];
-
-    setMonthsList(updatedMonths);
-    setSelectedVisibleMonths(updatedVisible);
-
-    // Persist to storage & sync with root App state
-    await saveAllMonths(updatedMonths);
-    await saveVisibleMonths(updatedVisible);
-    onUpdateAllMonths?.(updatedMonths);
-    onUpdateVisibleMonths(updatedVisible);
-
-    const daysCount = getCalendarDaysForMonth(key).length;
-    showToast('success', `Mois « ${label} » créé (${daysCount} jours). Les journées de tous les salariés sont générées automatiquement : férié, repos le week-end, journée de base sinon.`);
-  };
-
-  // Ajoute l'exercice suivant (12 mois, 1er juin -> 31 mai) ; le serveur génère les journées manquantes
-  const nextExerciseStartYear = monthsList.length
-    ? Math.max(...monthsList.map((m) => getExerciseStartYear(m.key))) + 1
-    : getCurrentExerciseStartYear();
-
-  const handleAddNextExercise = async () => {
-    const items = getExerciseMonthItems(nextExerciseStartYear).filter(
-      (item) => !monthsList.some((m) => m.key === item.key)
-    );
-    if (items.length === 0) {
-      showToast('error', 'Cet exercice existe déjà.');
-      return;
-    }
-    const updatedMonths = [...monthsList, ...items];
-    const updatedVisible = [...selectedVisibleMonths, ...items.map((i) => i.key).filter((k) => !selectedVisibleMonths.includes(k))];
-
-    setMonthsList(updatedMonths);
-    setSelectedVisibleMonths(updatedVisible);
-
-    await saveAllMonths(updatedMonths);
-    await saveVisibleMonths(updatedVisible);
-    onUpdateAllMonths?.(updatedMonths);
-    onUpdateVisibleMonths(updatedVisible);
-
-    showToast('success', `Exercice ${nextExerciseStartYear}-${nextExerciseStartYear + 1} ajouté (${items.length} mois). Journées générées pour tous les salariés.`);
-  };
-
-  // Start Edit Month
-  const handleStartEditMonth = (m: MonthItem) => {
-    setMonthToEdit(m);
-    setEditMonthKey(m.key);
-    setEditMonthLabel(m.label);
-    setEditMonthTab(m.tab);
-    setEditMonthCustomWorkingDays(
-      typeof m.customWorkingDays === 'number' ? String(m.customWorkingDays) : ''
-    );
-    setEditMonthCustomBaseHours(
-      typeof m.customBaseHours === 'number' ? String(m.customBaseHours) : ''
-    );
-  };
-
-  // Save Edit Month
-  const handleSaveEditMonth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!monthToEdit) return;
-
-    const oldKey = monthToEdit.key;
-    const newKey = editMonthKey.trim();
-    const newLabel = editMonthLabel.trim() || getFrenchMonthLabel(newKey);
-    const newTab = editMonthTab.trim().toUpperCase() || getExcelTabLabel(newKey);
-
-    if (!newKey || !newKey.match(/^\d{4}-\d{2}$/)) {
-      showToast('error', 'Le format du mois doit être AAAA-MM (ex: 2026-11).');
-      return;
-    }
-
-    if (newKey !== oldKey && monthsList.some((m) => m.key === newKey)) {
-      showToast('error', `Le mois « ${newKey} » existe déjà.`);
-      return;
-    }
-
-    const parsedWorkingDays = editMonthCustomWorkingDays.trim() !== ''
-      ? Math.max(0, parseInt(editMonthCustomWorkingDays.trim(), 10))
-      : undefined;
-
-    const parsedBaseHours = editMonthCustomBaseHours.trim() !== ''
-      ? Math.max(0, parseFloat(editMonthCustomBaseHours.trim().replace(',', '.')))
-      : undefined;
-
-    const updatedMonths: MonthItem[] = monthsList.map((m) =>
-      m.key === oldKey
-        ? {
-            key: newKey,
-            label: newLabel,
-            tab: newTab,
-            customWorkingDays: !isNaN(parsedWorkingDays as number) ? parsedWorkingDays : undefined,
-            customBaseHours: !isNaN(parsedBaseHours as number) ? parsedBaseHours : undefined,
-          }
-        : m
-    );
-
-    let updatedVisible = selectedVisibleMonths;
-    if (newKey !== oldKey) {
-      updatedVisible = selectedVisibleMonths.map((k) => (k === oldKey ? newKey : k));
-    }
-
-    setMonthsList(updatedMonths);
-    setSelectedVisibleMonths(updatedVisible);
-    setMonthToEdit(null);
-
-    await saveAllMonths(updatedMonths);
-    await saveVisibleMonths(updatedVisible);
-    onUpdateAllMonths?.(updatedMonths);
-    onUpdateVisibleMonths(updatedVisible);
-
-    showToast('success', `Mois « ${newLabel} » mis à jour.`);
-  };
-
-  // Delete Month
-  const handleConfirmDeleteMonth = async () => {
-    if (!monthToDelete) return;
-    const key = monthToDelete.key;
-    const label = monthToDelete.label;
-
-    if (monthsList.length <= 1) {
-      showToast('error', "Impossible de supprimer l'unique mois de planning.");
-      setMonthToDelete(null);
-      return;
-    }
-
-    const updatedMonths = monthsList.filter((m) => m.key !== key);
-    const updatedVisible = selectedVisibleMonths.filter((m) => m !== key);
-
-    setMonthsList(updatedMonths);
-    setSelectedVisibleMonths(updatedVisible);
-    deleteMonthData(key);
-    setMonthToDelete(null);
-
-    await saveAllMonths(updatedMonths);
-    await saveVisibleMonths(updatedVisible);
-    onUpdateAllMonths?.(updatedMonths);
-    onUpdateVisibleMonths(updatedVisible);
-
-    showToast('success', `Mois « ${label} » supprimé.`);
-  };
-
-  const handleSaveMonthsToBackend = async () => {
-    setIsSavingMonths(true);
-    await saveAllMonths(monthsList);
-    await saveVisibleMonths(selectedVisibleMonths);
-    setIsSavingMonths(false);
-    onUpdateAllMonths?.(monthsList);
-    onUpdateVisibleMonths(selectedVisibleMonths);
-    setMonthsSavedSuccess(true);
-    setTimeout(() => setMonthsSavedSuccess(false), 3000);
-    showToast('success', "Configuration des mois sauvegardée.");
+    await saveAllMonths(all);
+    await saveVisibleMonths(visible);
+    onUpdateAllMonths?.(all);
+    onUpdateVisibleMonths(visible);
   };
 
   // Check if current user has admin rights
@@ -1133,7 +815,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
           employees={employees}
           allMonths={monthsList}
           selectedMonth={visibleMonths[0] || monthsList[0]?.key || ''}
-          teamSchedules={teamSchedules || {}}
           tableau2Options={tableau2Options}
           onPlanningImported={(mKey, scheds, newEmps) => {
             if (newEmps && newEmps.length > 0) {
@@ -1823,211 +1504,17 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </div>
       )}
 
-      {/* SUB-TAB 2: MONTHS */}
+      {/* SUB-TAB 2: MOIS & EXERCICES (gestion par exercice complet) */}
       {adminTab === 'months' && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Mois de planning</h3>
-                <p className="text-xs text-slate-500">
-                  Créez, modifiez ou supprimez des mois. Cochez les mois visibles dans les plannings des salariés.
-                </p>
-              </div>
-              <button
-                onClick={handleSaveMonthsToBackend}
-                disabled={isSavingMonths}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {monthsSavedSuccess ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Sauvegardé !</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSavingMonths ? 'animate-spin' : ''}`} />
-                    <span>Enregistrer</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* List of existing months with Edit and Delete options */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-              {monthsList.map((m) => {
-                const isChecked = selectedVisibleMonths.includes(m.key);
-                const calDays = getCalendarDaysForMonth(m.key);
-
-                return (
-                  <div
-                    key={m.key}
-                    className={`p-3 rounded-xl border transition-all flex flex-col justify-between gap-2.5 ${
-                      isChecked
-                        ? 'border-emerald-600 bg-emerald-50/40 text-emerald-950 shadow-2xs'
-                        : 'border-slate-200 bg-white text-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold truncate">{m.label}</p>
-                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-                          Onglet : <span className="font-semibold">{m.tab}</span>
-                        </p>
-                        {(() => {
-                          const mCal = getMonthWorkingCalendar(m.key, undefined, m);
-                          return (
-                            <p className="text-[10px] text-emerald-700 mt-0.5 flex items-center gap-1">
-                              <CalendarDays className="w-3 h-3 shrink-0" />
-                              <span>
-                                {mCal.netWorkingDays}j ouvrés ({mCal.standardBaseHours}h)
-                                {mCal.isCustomized ? ' · modulé' : ''}
-                              </span>
-                            </p>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Visible checkbox toggle */}
-                      <button
-                        type="button"
-                        onClick={() => handleToggleMonthVisibility(m.key)}
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-                          isChecked
-                            ? 'bg-emerald-700 text-white shadow-xs'
-                            : 'border border-slate-300 hover:bg-slate-100 text-transparent'
-                        }`}
-                        title={isChecked ? 'Mois visible (cliquez pour masquer)' : 'Mois masqué (cliquez pour afficher)'}
-                      >
-                        <Check className="w-3.5 h-3.5 stroke-[3]" />
-                      </button>
-                    </div>
-
-                    {/* Bottom actions: Edit and Delete */}
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 text-[11px]">
-                      <span className="font-mono text-[10px] text-slate-400">{m.key}</span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleStartEditMonth(m)}
-                          className="p-1 rounded-md text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
-                          title={`Modifier le mois ${m.label}`}
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMonthToDelete(m)}
-                          className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                          title={`Supprimer le mois ${m.label}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-emerald-900">
-                Exercice suivant : {nextExerciseStartYear}-{nextExerciseStartYear + 1}
-              </p>
-              <p className="text-xs text-emerald-800/80">
-                Ajoute les 12 mois (juin → mai) et génère les journées de tous les salariés : férié, repos le week-end,
-                journée de base le reste du temps. Les mois et journées déjà saisis ne sont jamais modifiés.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleAddNextExercise}
-              className="shrink-0 px-4 py-2 rounded-xl bg-emerald-700 text-white text-sm font-semibold hover:bg-emerald-800 transition-colors"
-            >
-              Ajouter l'exercice
-            </button>
-          </div>
-
-          {/* Form to create a new month with automatic calendar dates matching */}
-          <form
-            onSubmit={handleAddMonth}
-            className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3"
-          >
-            <div>
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                Créer un nouveau mois de planning
-              </h4>
-              <p className="text-[11px] text-slate-500">
-                Les dates de planning générées correspondent strictement au calendrier réel du mois sélectionné.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
-                  Mois & Année :
-                </label>
-                <input
-                  type="month"
-                  value={newMonthPickerVal}
-                  onChange={(e) => handleMonthPickerChange(e.target.value)}
-                  className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-2xs"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
-                  Libellé affiché :
-                </label>
-                <input
-                  type="text"
-                  placeholder="ex: Novembre 2026"
-                  value={newMonthLabel}
-                  onChange={(e) => setNewMonthLabel(e.target.value)}
-                  className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-2xs"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
-                  Onglet Excel :
-                </label>
-                <input
-                  type="text"
-                  placeholder="ex: NOVEMBRE 26"
-                  value={newMonthTab}
-                  onChange={(e) => setNewMonthTab(e.target.value.toUpperCase())}
-                  className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-600 uppercase shadow-2xs"
-                />
-              </div>
-
-              <div className="flex flex-col justify-end">
-                <button
-                  type="submit"
-                  disabled={!newMonthPickerVal.trim()}
-                  className="flex items-center justify-center gap-1.5 py-2 px-4 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 rounded-lg transition-colors shadow-2xs h-[38px]"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Créer le mois</span>
-                </button>
-              </div>
-            </div>
-
-            {newMonthPickerVal && (
-              <div className="text-[11px] text-emerald-800 bg-emerald-50/70 p-2.5 rounded-lg border border-emerald-200 flex items-center gap-2">
-                <Info className="w-3.5 h-3.5 shrink-0 text-emerald-700" />
-                <span>
-                  Calendrier officiel détecté : <strong>{getMonthCalendarSummary(newMonthPickerVal)}</strong>
-                </span>
-              </div>
-            )}
-          </form>
-        </div>
+        <AdminExercisesSection
+          allMonths={monthsList}
+          visibleMonths={selectedVisibleMonths}
+          onApply={handleApplyExercises}
+          showToast={showToast}
+        />
       )}
 
-      {/* SUB-TAB 3: CONNECTION, SECURITY & PUSH NOTIFICATIONS */}
+      {/* SUB-TAB 3: SÉCURITÉ (CODE PIN ADMINISTRATEUR) */}
       {/* SUB-TAB: CODE PIN ADMINISTRATEUR */}
       {adminTab === 'connection' && (
         <div className="space-y-4">
@@ -2370,247 +1857,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
               <button
                 type="button"
                 onClick={handleConfirmDeleteEmployee}
-                className="py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-colors"
-              >
-                Supprimer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: MODIFIER UN MOIS */}
-      {monthToEdit && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xl max-w-md w-full space-y-4 text-slate-900 dark:text-white transition-colors">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 flex items-center justify-center">
-                  <Edit3 className="w-4 h-4" />
-                </div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Modifier le mois « {monthToEdit.label} »
-                </h4>
-              </div>
-              <button
-                onClick={() => setMonthToEdit(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveEditMonth} className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                  Clé du mois (AAAA-MM) :
-                </label>
-                <input
-                  type="month"
-                  value={editMonthKey}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setEditMonthKey(val);
-                    if (val && val.includes('-')) {
-                      setEditMonthLabel(getFrenchMonthLabel(val));
-                      setEditMonthTab(getExcelTabLabel(val));
-                    }
-                  }}
-                  className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 shadow-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                  Libellé complet :
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editMonthLabel}
-                  onChange={(e) => setEditMonthLabel(e.target.value)}
-                  className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 shadow-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                  Nom d'onglet Excel :
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editMonthTab}
-                  onChange={(e) => setEditMonthTab(e.target.value.toUpperCase())}
-                  className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 uppercase shadow-xs"
-                />
-              </div>
-
-              {/* Working days & Base hours modulation */}
-              <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200/80 dark:border-slate-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                    <CalendarDays className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                    <span>Base horaire & Jours ouvrés du mois</span>
-                  </span>
-                  <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                    Samedi & Dimanche chômés
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Jours ouvrés (Mon-Fri) :
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="31"
-                      placeholder={`Auto : ${getMonthWorkingCalendar(editMonthKey).netWorkingDays}j`}
-                      value={editMonthCustomWorkingDays}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setEditMonthCustomWorkingDays(val);
-                        if (val !== '' && !isNaN(parseInt(val, 10))) {
-                          setEditMonthCustomBaseHours(String(parseInt(val, 10) * 7));
-                        }
-                      }}
-                      className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 shadow-2xs"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Base d'heures du mois :
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      placeholder={`Auto : ${getMonthWorkingCalendar(editMonthKey).standardBaseHours}h`}
-                      value={editMonthCustomBaseHours}
-                      onChange={(e) => setEditMonthCustomBaseHours(e.target.value)}
-                      className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 shadow-2xs"
-                    />
-                  </div>
-                </div>
-
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Laissez vide pour conserver le <strong>calcul automatique</strong> basé sur les jours ouvrés réels du mois (7h/jour ouvré, hors jours fériés). Remplissez pour moduler manuellement.
-                </p>
-              </div>
-
-              <div className="text-[11px] text-emerald-800 bg-emerald-50 p-2.5 rounded-lg border border-emerald-200">
-                Calendrier correspondant : <strong>{getMonthCalendarSummary(editMonthKey)}</strong>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setMonthToEdit(null)}
-                  className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs"
-                >
-                  Enregistrer
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: REMISE À ZÉRO POUR UN NOUVEAU MAGASIN */}
-      {isResetStoreModalOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xl max-w-md w-full space-y-4 text-slate-900 dark:text-white transition-colors">
-            <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 flex items-center justify-center mx-auto">
-              <AlertTriangle className="w-6 h-6" />
-            </div>
-
-            <div className="text-center space-y-1.5">
-              <h4 className="text-base font-bold text-slate-900 dark:text-white">
-                Remettre l'application à zéro ?
-              </h4>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                Cette opération prépare l'application pour un <strong>nouveau magasin</strong> en effaçant tous les salariés personnalisés, les notes et les plannings du magasin précédent.
-              </p>
-              <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/80 text-emerald-900 dark:text-emerald-200 text-xs text-left space-y-1">
-                <p className="font-semibold">Ce qui sera conservé intact :</p>
-                <ul className="list-disc list-inside text-[11px] text-emerald-800 dark:text-emerald-300 space-y-0.5">
-                  <li>Le compte Administrateur nommé « Responsable » (accès complet préservé)</li>
-                  <li>Les créneaux et horaires types d'exemple</li>
-                  <li>Le code PIN d'accès Administrateur</li>
-                </ul>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
-                Nom du nouveau magasin / entreprise :
-              </label>
-              <input
-                type="text"
-                value={resetStoreInput}
-                onChange={(e) => setResetStoreInput(e.target.value)}
-                placeholder="Ex: Mon Nouveau Magasin"
-                className="w-full text-xs font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-600 shadow-xs"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsResetStoreModalOpen(false)}
-                className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-colors"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmResetStore}
-                className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-colors"
-              >
-                Confirmer la remise à zéro
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: CONFIRMATION SUPPRESSION MOIS */}
-      {monthToDelete && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xl max-w-sm w-full space-y-4">
-            <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center mx-auto">
-              <Trash2 className="w-5 h-5" />
-            </div>
-
-            <div className="text-center space-y-1">
-              <h4 className="text-sm font-bold text-slate-900">
-                Supprimer le mois « {monthToDelete.label} » ?
-              </h4>
-              <p className="text-xs text-slate-500">
-                Ce mois sera définitivement retiré des plannings et de l'application.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setMonthToDelete(null)}
-                className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDeleteMonth}
                 className="py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-colors"
               >
                 Supprimer

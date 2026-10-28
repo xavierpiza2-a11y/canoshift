@@ -22,12 +22,10 @@ import {
   Clock,
   TrendingUp,
   BarChart3,
-  CalendarDays,
   PieChart as PieIcon,
   ChevronDown,
   ChevronUp,
-  Award,
-  CheckCircle2,
+  CheckCircle2
 } from 'lucide-react';
 
 interface HoursChartProps {

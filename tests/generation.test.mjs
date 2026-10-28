@@ -86,28 +86,35 @@ await call('POST', '/api/planning/generate', { headers: AH, body: { monthKeys: [
 sc = await schedules();
 t('journée supprimée (absente) : recréée par la reprise', sc[m4]['Nouveau'].days[monday]?.shift === 'BASE');
 
-// ---- 5. Ajout d'un mois (février bissextile) -------------------------------------------------------
+// ---- 5. Un mois isolé n'existe pas : ajouter un mois crée l'exercice COMPLET --------------------------------
 cfg = await config();
 const other = JSON.stringify((await schedules())[months0[0]]);
 const feb28 = { key: '2028-02', tab: 'FEVRIER 28', label: 'Février 2028' };
 r = await call('POST', '/api/config', { headers: AH, body: { allMonths: [...cfg.allMonths, feb28], visibleMonths: [...cfg.visibleMonths, '2028-02'] } });
 sc = await schedules();
-const emps = cfg.employees.map((e) => e.name).concat('Nouveau');
-t('mois ajouté : généré pour TOUS les salariés (29 jours en 2028)', emps.every((n) => Object.keys(sc['2028-02']?.[n]?.days || {}).length === 29 && monthConforms(sc['2028-02'][n].days, '2028-02')));
-t('les mois existants ne sont pas modifiés', JSON.stringify(sc[months0[0]]) === other);
-
-// ---- 6. Nouvel exercice -------------------------------------------------------------------------------
 cfg = await config();
 const ex27 = ['2027-06', '2027-07', '2027-08', '2027-09', '2027-10', '2027-11', '2027-12', '2028-01', '2028-02', '2028-03', '2028-04', '2028-05'];
-const items = ex27.filter((k) => !cfg.allMonths.some((m) => m.key === k)).map((k) => ({ key: k, tab: k, label: k }));
-const beforeMonths = JSON.stringify(Object.fromEntries(months0.map((m) => [m, sc[m]])));
-r = await call('POST', '/api/config', { headers: AH, body: { allMonths: [...cfg.allMonths, ...items], visibleMonths: [...cfg.visibleMonths, ...items.map((i) => i.key)] } });
-sc = await schedules();
-t('nouvel exercice : 12 mois (juin→mai) générés pour tous les salariés', ex27.every((m) => emps.every((n) => monthConforms(sc[m]?.[n]?.days, m))));
-t('exercice précédent intact', JSON.stringify(Object.fromEntries(months0.map((m) => [m, sc[m]]))) === beforeMonths);
+const emps = cfg.employees.map((e) => e.name);
+t('un mois ajouté complète tout son exercice (12 mois)', ex27.every((k) => cfg.allMonths.some((m) => m.key === k)) && cfg.allMonths.length === 24);
+t('mois triés chronologiquement', JSON.stringify(cfg.allMonths.map((m) => m.key)) === JSON.stringify(cfg.allMonths.map((m) => m.key).sort()));
+t('seul le mois demandé est visible, les autres sont à publier', cfg.visibleMonths.includes('2028-02') && !cfg.visibleMonths.includes('2027-08'));
+t('journées générées pour TOUS les salariés sur les 12 mois (février 2028 = 29 jours)', ex27.every((m) => emps.every((n) => monthConforms(sc[m]?.[n]?.days, m))) && Object.keys(sc['2028-02'][emps[0]].days).length === 29);
+t('les mois existants ne sont pas modifiés', JSON.stringify(sc[months0[0]]) === other);
 
-// ---- 7. Concurrence / doubles clics ------------------------------------------------------------------
+// ---- 6. Retirer un seul mois : refusé (l'exercice est réparé) ; retirer un exercice entier : accepté ------------
 cfg = await config();
+r = await call('POST', '/api/config', { headers: AH, body: { allMonths: cfg.allMonths.filter((m) => m.key !== '2027-08') } });
+cfg = await config();
+t('suppression d\'un mois isolé impossible (exercice complété)', cfg.allMonths.some((m) => m.key === '2027-08'));
+r = await call('POST', '/api/config', { headers: AH, body: { visibleMonths: [...cfg.visibleMonths, '1999-01'] } });
+cfg = await config();
+t('mois visibles inexistants ignorés', !cfg.visibleMonths.includes('1999-01'));
+const beforeMonths = JSON.stringify(Object.fromEntries(months0.map((m) => [m, sc[m]])));
+r = await call('POST', '/api/config', { headers: AH, body: { allMonths: cfg.allMonths.filter((m) => !ex27.includes(m.key)), visibleMonths: cfg.visibleMonths.filter((k) => !ex27.includes(k)) } });
+cfg = await config();
+t('exercice entier retirable : 12 mois restants, exercice précédent intact', cfg.allMonths.length === 12 && JSON.stringify(Object.fromEntries(months0.map((m) => [m, sc[m]]))) === beforeMonths);
+
+// ---- 7. Concurrence / doubles clics -----------------------------------------------------------------------------
 const m7 = { key: '2030-03', tab: 'MARS 30', label: 'Mars 2030' };
 const cfgBody = { allMonths: [...cfg.allMonths, m7], visibleMonths: [...cfg.visibleMonths, '2030-03'] };
 const results = await Promise.all([1, 2, 3, 4, 5].map(() => call('POST', '/api/config', { headers: AH, body: cfgBody })));
@@ -115,7 +122,8 @@ await Promise.all([1, 2, 3].map(() => call('POST', '/api/planning/generate', { h
 sc = await schedules();
 t('5 envois simultanés : tous acceptés', results.every((x) => x.status === 200));
 t('…journées uniques et complètes (31 jours, aucun doublon)', emps.every((n) => Object.keys(sc['2030-03'][n].days).length === 31 && monthConforms(sc['2030-03'][n].days, '2030-03')));
-t('…mois ajouté une seule fois dans la config', (await config()).allMonths.filter((m) => m.key === '2030-03').length === 1);
+cfg = await config();
+t('…exercice 2029-2030 créé une seule fois (12 mois)', cfg.allMonths.filter((m) => m.key === '2030-03').length === 1 && cfg.allMonths.length === 24);
 
 // ---- 8. Totaux jamais périmés + aucun salarié perdu --------------------------------------------------
 const mTot = months0[months0.length - 2];
@@ -149,7 +157,7 @@ t('…créneaux toujours verrouillés', cfgOrd.tableau2Shifts.every((o) => o.loc
 // ---- 10. Données réelles : option A (aucune réinitialisation) ----------------------------------------------
 if (DATA && existsSync(DATA)) {
   const real = JSON.parse(readFileSync(DATA, 'utf8'));
-  r = await call('POST', '/api/backup', { headers: AH, body: real });
+  r = await call('POST', `/api/superadmin/stores/${store.id}/restore`, { headers: SA, body: real });
   t('restauration des vraies données (copie isolée)', r.status === 200);
   const after = await schedules();
   const identical = JSON.stringify(Object.keys(real.schedules).sort()) === JSON.stringify(Object.keys(after).sort()) &&

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Employee } from '../types/planning';
-import { RefreshCw, UserCheck, Bell, ChevronDown, Sun, Moon } from 'lucide-react';
+import { RefreshCw, ChevronDown, Sun, Moon } from 'lucide-react';
 import { AppLogo } from './AppLogo';
 import { useTheme } from '../hooks/useTheme';
 
@@ -11,9 +11,7 @@ interface HeaderProps {
   onRefresh: () => void;
   isSyncing: boolean;
   lastSyncTime: Date | null;
-  isOffline: boolean;
   isRealtimeConnected?: boolean;
-  onOpenNotifications?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -23,9 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
   onRefresh,
   isSyncing,
   lastSyncTime,
-  isOffline,
   isRealtimeConnected = true,
-  onOpenNotifications,
 }) => {
   const { isDark, toggleTheme } = useTheme();
 

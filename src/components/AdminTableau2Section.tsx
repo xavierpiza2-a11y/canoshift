@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
 import { Tableau2ShiftOption } from '../types/planning';
-import { DEFAULT_TABLEAU2_SHIFTS } from '../config/constants';
 import {
   saveStoredTableau2Shifts,
   clearAllTableau2AndCategories,
   restoreExampleTableau2AndCategories,
 } from '../services/api';
 import {
-  CATEGORY_COLORS,
-  getCategoryDetails,
+  CATEGORY_COLORS
 } from '../config/categoryStyles';
 import {
   Clock,

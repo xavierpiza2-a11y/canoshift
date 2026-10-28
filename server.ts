@@ -15,7 +15,6 @@ import {
   dbDeleteStore,
   dbGetStoreStats,
   dbGetConfig,
-  dbSaveConfig,
   dbSaveConfigAndGenerate,
   dbEnsureSchedules,
   dbGetAllSchedules,
@@ -34,7 +33,7 @@ import {
   dbResetToCleanStore,
   dbGetFullBackup,
   dbRestoreBackup,
-  dbGetAllStoresBackup,
+  dbGetAllStoresBackup
 } from './src/server/db.ts';
 import {
   createSession,
@@ -364,7 +363,7 @@ app.post('/api/superadmin/login', (req, res) => {
 app.use('/api/superadmin', requireSuper, bigJson);
 
 // List all stores with metadata and statistics
-app.get('/api/superadmin/stores', (req, res) => {
+app.get('/api/superadmin/stores', (_req, res) => {
   try {
     const stores = dbGetStores().map((s) => ({
       ...s,
@@ -495,7 +494,7 @@ app.post('/api/superadmin/stores/:storeId/reset', async (req, res) => {
 });
 
 // Download global backup containing all stores
-app.get('/api/superadmin/backup-all', async (req, res) => {
+app.get('/api/superadmin/backup-all', async (_req, res) => {
   try {
     const allBackup = await dbGetAllStoresBackup();
     const filename = `reseau_complet_backup_${Date.now()}.json`;
@@ -790,52 +789,6 @@ app.delete('/api/history/:employeeName', requireAdmin, async (req, res) => {
   }
 });
 
-// 8. Reset / Blank Slate (Scoped)
-app.post('/api/reset', requireAdmin, async (req, res) => {
-  try {
-    const storeId = resolveStoreId(req);
-    const newConfig = await dbResetToCleanStore(storeId);
-    broadcast({
-      type: 'STORE_RESET',
-      storeId,
-      config: newConfig,
-    });
-    res.json({ success: true, storeId, config: publicConfig(newConfig) });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 9. Full Backup Export & Import (Scoped)
-app.get('/api/backup', requireAdmin, async (req, res) => {
-  try {
-    const storeId = resolveStoreId(req);
-    const store = dbGetStoreById(storeId);
-    const backup = await dbGetFullBackup(storeId);
-    const safeName = (store?.name || 'magasin').toLowerCase().replace(/[^a-z0-9]/g, '_');
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="planning_${safeName}_${Date.now()}.json"`);
-    res.json(backup);
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/backup', requireAdmin, async (req, res) => {
-  try {
-    const storeId = resolveStoreId(req);
-    const updatedConfig = await dbRestoreBackup(storeId, req.body);
-    broadcast({
-      type: 'BACKUP_RESTORED',
-      storeId,
-      config: updatedConfig,
-    });
-    res.json({ success: true, storeId, message: 'Sauvegarde restaurée avec succès', config: publicConfig(updatedConfig) });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 // Erreurs de parsing / taille : réponse JSON propre, sans détail interne
 app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (!err) return next();
@@ -867,7 +820,7 @@ async function startServer() {
     // Production mode: Serve compiled assets
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

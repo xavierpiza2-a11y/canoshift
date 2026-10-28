@@ -13,7 +13,6 @@ import {
 import {
   ShieldCheck,
   ShieldAlert,
-  KeyRound,
   Store,
   Plus,
   Trash2,
@@ -32,7 +31,7 @@ import {
   Database,
   Calendar,
   Users,
-  Copy,
+  Copy
 } from 'lucide-react';
 
 interface SuperAdminModalProps {

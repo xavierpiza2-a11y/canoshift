@@ -23,17 +23,12 @@ import {
   Users,
   User,
   Clock,
-  Briefcase,
   TrendingUp,
   BarChart3,
   PieChart as PieIcon,
   CheckCircle2,
-  Calendar,
-  Sparkles,
   ArrowRight,
-  RefreshCw,
-  Award,
-  Scale,
+  RefreshCw
 } from 'lucide-react';
 
 interface HoursAnalyticsViewProps {
@@ -44,8 +39,6 @@ interface HoursAnalyticsViewProps {
   selectedMonth: string;
   allMonths: MonthItem[];
   visibleMonths: string[];
-  isLoading: boolean;
-  isOffline: boolean;
   onSelectMonth: (monthKey: string) => void;
   onRefresh: () => void;
 }
@@ -82,8 +75,6 @@ export const HoursAnalyticsView: React.FC<HoursAnalyticsViewProps> = ({
   selectedMonth,
   allMonths,
   visibleMonths,
-  isLoading,
-  isOffline,
   onSelectMonth,
   onRefresh,
 }) => {

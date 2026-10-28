@@ -1,6 +1,7 @@
 import React from 'react';
 import { MonthItem } from '../types/planning';
 import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
+import { getExerciseStartYear } from '../shared/planning';
 
 interface MonthSelectorProps {
   allMonths: MonthItem[];
@@ -21,13 +22,15 @@ export const MonthSelector: React.FC<MonthSelectorProps> = ({
   );
 
   const currentIndex = activeMonthsList.findIndex((m) => m.key === selectedMonth);
-  const currentItem =
-    activeMonthsList[currentIndex] ||
-    allMonths.find((m) => m.key === selectedMonth) || {
-      key: selectedMonth,
-      label: selectedMonth,
-      tab: selectedMonth,
-    };
+  // Regroupement par exercice (1er juin -> 31 mai)
+  const exerciseGroups = (() => {
+    const groups = new Map<number, MonthItem[]>();
+    for (const m of activeMonthsList) {
+      const y = getExerciseStartYear(m.key);
+      groups.set(y, [...(groups.get(y) || []), m]);
+    }
+    return [...groups.entries()].sort((a, b) => a[0] - b[0]);
+  })();
 
   const handlePrev = () => {
     if (currentIndex > 0) {
@@ -60,10 +63,18 @@ export const MonthSelector: React.FC<MonthSelectorProps> = ({
           aria-label="Sélectionner le mois"
           className="bg-transparent text-sm font-bold text-slate-100 focus:outline-none cursor-pointer truncate py-1 pr-6"
         >
-          {activeMonthsList.map((m) => (
-            <option key={m.key} value={m.key} className="bg-slate-900 text-slate-100">
-              {m.label}
-            </option>
+          {exerciseGroups.map(([startYear, months]) => (
+            <optgroup
+              key={startYear}
+              label={`Exercice ${startYear}-${startYear + 1}`}
+              className="bg-slate-900 text-slate-400"
+            >
+              {months.map((m) => (
+                <option key={m.key} value={m.key} className="bg-slate-900 text-slate-100">
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </div>

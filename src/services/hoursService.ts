@@ -168,7 +168,7 @@ export function getMonthWorkingCalendar(
 export function parseWorkedHours(
   shiftText: string,
   hoursText?: string,
-  contractType?: ContractType
+  _contractType?: ContractType
 ): number {
   if (!shiftText && !hoursText) return 0;
   // Catégories de base : BASE = 7 h, REPOS/RTT/FERIE/CFA/CONGES = 0 h (règle commune client/serveur)

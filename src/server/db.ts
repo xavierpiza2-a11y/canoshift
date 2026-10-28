@@ -10,7 +10,7 @@ import {
   DEFAULT_API_TOKEN,
   DEFAULT_ADMIN_PIN,
 } from '../config/constants.ts';
-import { coreShiftHours, getMonthDateKeys, generateDefaultDay } from '../shared/planning.ts';
+import { coreShiftHours, getMonthDateKeys, generateDefaultDay, buildMonthItem, getExerciseMonthKeys, getExerciseStartYear } from '../shared/planning.ts';
 import { ensureCoreConfig } from '../shared/coreConfig.ts';
 
 export interface StoreInfo {
@@ -524,6 +524,9 @@ export async function dbSaveConfig(storeId: string, partialConfig: Partial<Serve
   // les catégories personnalisées sont conservées.
   applyCoreConfig(db);
 
+  // Les mois sont gérés par EXERCICE COMPLET (1er juin -> 31 mai) : jamais de mois isolé.
+  normalizeExercises(db);
+
   // Sync token or adminPin with store registry if changed
   const store = storesRegistry.find((s) => s.id === storeId);
   if (store) {
@@ -662,6 +665,26 @@ function generateMonthDays(db: DatabaseState, monthKey: string, employeeNames: s
     created += added;
   }
   return created;
+}
+
+/**
+ * Garantit que chaque exercice présent dans la liste des mois est complet (12 mois, triés),
+ * et que les mois visibles existent. Les mois déjà présents (libellés, réglages) ne sont jamais modifiés.
+ */
+function normalizeExercises(db: DatabaseState): void {
+  const months = db.config.allMonths;
+  if (!Array.isArray(months) || months.length === 0) return;
+  const byKey = new Map(months.map((m) => [m.key, m]));
+  for (const year of new Set(months.map((m) => getExerciseStartYear(m.key)))) {
+    for (const key of getExerciseMonthKeys(year)) {
+      if (!byKey.has(key)) byKey.set(key, buildMonthItem(key));
+    }
+  }
+  const all = [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
+  db.config.allMonths = all;
+  if (Array.isArray(db.config.visibleMonths)) {
+    db.config.visibleMonths = db.config.visibleMonths.filter((k) => byKey.has(k));
+  }
 }
 
 /** Applique la définition officielle des catégories de base. Retourne true si la config a changé. */

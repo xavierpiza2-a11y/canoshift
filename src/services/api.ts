@@ -11,13 +11,12 @@ import {
 } from '../types/planning';
 import {
   DEFAULT_API_TOKEN,
-  DEFAULT_ADMIN_PIN,
   DEFAULT_STORE_NAME,
   DEFAULT_EMPLOYEES,
   DEFAULT_VISIBLE_MONTHS,
   DEFAULT_ALL_MONTHS,
   DEFAULT_TABLEAU2_SHIFTS,
-  DEFAULT_CATEGORIES,
+  DEFAULT_CATEGORIES
 } from '../config/constants';
 import { realtimeClient, RealtimeMessage } from './realtimeClient';
 
@@ -34,7 +33,6 @@ const KEY_DAY_NOTES_PREFIX = 'planning_day_notes_';
 const CACHE_PREFIX_SCHEDULE = 'planning_sched_';
 const CACHE_PREFIX_TEAM = 'planning_team_';
 
-export const STORAGE_KEY_ADMIN_PIN = 'planning_admin_pin';
 export const STORAGE_KEY_SUPERADMIN_SESSION = 'planning_superadmin_session';
 
 // ---------------------------------------------------------------------------
@@ -74,6 +72,15 @@ export function setActiveStore(store: { id: string; name: string; token: string 
 // ---------------------------------------------------------------------------
 // SESSIONS D'AUTHENTIFICATION (en mémoire uniquement — jamais de PIN stocké)
 // ---------------------------------------------------------------------------
+// Les anciennes versions mémorisaient le PIN administrateur en clair sur l'appareil : on l'efface.
+if (typeof window !== 'undefined') {
+  try {
+    localStorage.removeItem('planning_admin_pin');
+  } catch {
+    // stockage indisponible
+  }
+}
+
 let storeSession = '';
 let adminSession = '';
 let superSession = '';
@@ -233,9 +240,6 @@ if (typeof window !== 'undefined') {
           if (msg.config.apiToken) {
             localStorage.setItem(KEY_API_TOKEN, msg.config.apiToken);
           }
-          if (msg.config.adminPin) {
-            localStorage.setItem(STORAGE_KEY_ADMIN_PIN, msg.config.adminPin);
-          }
           if (msg.config.tableau2Shifts) {
             localStorage.setItem(KEY_CACHED_TABLEAU2, JSON.stringify(msg.config.tableau2Shifts));
           }
@@ -296,13 +300,11 @@ if (typeof window !== 'undefined') {
         if (typeof window !== 'undefined') {
           const tokenVal = localStorage.getItem('planning_token_validated');
           const apiToken = localStorage.getItem('planning_api_token');
-          const adminPin = localStorage.getItem('planning_admin_pin');
           const store = localStorage.getItem(KEY_STORE_NAME);
           const activeId = localStorage.getItem(KEY_ACTIVE_STORE_ID);
           localStorage.clear();
           if (tokenVal) localStorage.setItem('planning_token_validated', tokenVal);
           if (apiToken) localStorage.setItem('planning_api_token', apiToken);
-          if (adminPin) localStorage.setItem('planning_admin_pin', adminPin);
           if (store) localStorage.setItem(KEY_STORE_NAME, store);
           if (activeId) localStorage.setItem(KEY_ACTIVE_STORE_ID, activeId);
         }
@@ -400,28 +402,6 @@ export function setApiToken(token: string): void {
   }
 }
 
-export async function saveApiToken(newToken: string): Promise<boolean> {
-  const token = (newToken || '').trim();
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(KEY_API_TOKEN, token);
-  }
-  try {
-    const res = await authFetch(`${import.meta.env.BASE_URL}api/config`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getStoreHeaders(),
-      },
-      body: JSON.stringify({ apiToken: token }),
-    });
-    return res.ok;
-  } catch (err) {
-    console.error('Error saving API token to database:', err);
-    return false;
-  }
-}
-
-
 export async function verifyApiTokenWithStore(token: string): Promise<{
   valid: boolean;
   store?: { id: string; name: string; token: string };
@@ -448,21 +428,6 @@ export async function verifyApiTokenWithStore(token: string): Promise<{
   }
   const configured = getApiToken().trim().toUpperCase();
   return { valid: entered === configured };
-}
-
-export function getStoredAdminPin(): string {
-  if (typeof window === 'undefined') return DEFAULT_ADMIN_PIN;
-  const stored = localStorage.getItem(STORAGE_KEY_ADMIN_PIN);
-  if (!stored || stored.trim().length !== 6 || !/^\d{6}$/.test(stored.trim())) {
-    return DEFAULT_ADMIN_PIN;
-  }
-  return stored.trim();
-}
-
-export function setStoredAdminPin(newPin: string): void {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY_ADMIN_PIN, newPin.trim());
-  }
 }
 
 export async function saveAdminPin(newPin: string): Promise<boolean> {
@@ -549,7 +514,6 @@ export async function fetchConfig(): Promise<ConfigData> {
         const config: ConfigData = {
           storeName: data.config.storeName || DEFAULT_STORE_NAME,
           apiToken: data.config.apiToken || getApiToken(),
-          adminPin: data.config.adminPin || DEFAULT_ADMIN_PIN,
           employees: ensureResponsableAdmin(data.config.employees || DEFAULT_EMPLOYEES),
           visibleMonths: data.config.visibleMonths || DEFAULT_VISIBLE_MONTHS,
           allMonths: data.config.allMonths || DEFAULT_ALL_MONTHS,
@@ -562,9 +526,6 @@ export async function fetchConfig(): Promise<ConfigData> {
           }
           if (data.config.apiToken) {
             localStorage.setItem(KEY_API_TOKEN, data.config.apiToken);
-          }
-          if (data.config.adminPin) {
-            localStorage.setItem(STORAGE_KEY_ADMIN_PIN, data.config.adminPin);
           }
           if (data.config.tableau2Shifts) {
             localStorage.setItem(KEY_CACHED_TABLEAU2, JSON.stringify(data.config.tableau2Shifts));
@@ -592,7 +553,6 @@ export async function fetchConfig(): Promise<ConfigData> {
   return {
     storeName: getStoreName(),
     apiToken: getApiToken(),
-    adminPin: getStoredAdminPin(),
     employees: ensureResponsableAdmin(DEFAULT_EMPLOYEES),
     visibleMonths: DEFAULT_VISIBLE_MONTHS,
     allMonths: DEFAULT_ALL_MONTHS,
@@ -752,31 +712,6 @@ export async function restoreExampleTableau2AndCategories(): Promise<{
   await saveStoredTableau2Shifts(DEFAULT_TABLEAU2_SHIFTS);
   await saveStoredCategories(DEFAULT_CATEGORIES);
   return { shifts: DEFAULT_TABLEAU2_SHIFTS, categories: DEFAULT_CATEGORIES };
-}
-
-export async function resetToCleanStore(newStoreName?: string): Promise<void> {
-  const store = (newStoreName || '').trim() || DEFAULT_STORE_NAME;
-  try {
-    await authFetch(`${import.meta.env.BASE_URL}api/reset`, {
-      method: 'POST',
-      headers: getStoreHeaders(),
-    });
-    await saveStoreName(store);
-  } catch (err) {
-    console.error('Failed to reset store on database:', err);
-  }
-  if (typeof window !== 'undefined') {
-    const tokenVal = localStorage.getItem('planning_token_validated');
-    const apiToken = localStorage.getItem('planning_api_token');
-    const adminPin = localStorage.getItem('planning_admin_pin');
-    const activeId = localStorage.getItem(KEY_ACTIVE_STORE_ID);
-    localStorage.clear();
-    if (tokenVal) localStorage.setItem('planning_token_validated', tokenVal);
-    if (apiToken) localStorage.setItem('planning_api_token', apiToken);
-    if (adminPin) localStorage.setItem('planning_admin_pin', adminPin);
-    if (activeId) localStorage.setItem(KEY_ACTIVE_STORE_ID, activeId);
-    localStorage.setItem(KEY_STORE_NAME, store);
-  }
 }
 
 // ---------------------------------------------------------------------------

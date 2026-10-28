@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Employee, MonthItem, Tableau2ShiftOption } from '../types/planning';
-import { DEFAULT_TABLEAU2_SHIFTS } from '../config/constants';
+import { Employee, Tableau2ShiftOption } from '../types/planning';
 import {
   fetchAvailableShifts,
   updateShiftInSheet,
@@ -10,8 +9,7 @@ import {
 } from '../services/api';
 import {
   calculateEmployeeBalances,
-  simulateShiftImpact,
-  parseWorkedHours,
+  simulateShiftImpact
 } from '../services/hoursService';
 import { CATEGORY_COLORS } from '../config/categoryStyles';
 import {
@@ -22,17 +20,11 @@ import {
   Check,
   AlertTriangle,
   RefreshCw,
-  Sun,
-  Sunset,
   Briefcase,
-  Home,
-  GraduationCap,
   Sparkles,
   Scale,
-  TrendingUp,
-  TrendingDown,
   Palmtree,
-  Info,
+  Info
 } from 'lucide-react';
 
 interface AdminShiftEditModalProps {
@@ -40,7 +32,6 @@ interface AdminShiftEditModalProps {
   onClose: () => void;
   employees: Employee[];
   selectedMonth: string;
-  allMonths: MonthItem[];
   initialEmployee?: string;
   initialDate?: string;
   initialShift?: string;
@@ -53,7 +44,6 @@ export const AdminShiftEditModal: React.FC<AdminShiftEditModalProps> = ({
   onClose,
   employees,
   selectedMonth,
-  allMonths,
   initialEmployee,
   initialDate,
   initialShift,

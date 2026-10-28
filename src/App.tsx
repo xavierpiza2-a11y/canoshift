@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Employee,
   EmployeeMonthSchedule,
@@ -14,8 +14,7 @@ import {
 import {
   DEFAULT_EMPLOYEES,
   DEFAULT_VISIBLE_MONTHS,
-  DEFAULT_ALL_MONTHS,
-  DEFAULT_STORE_NAME,
+  DEFAULT_ALL_MONTHS
 } from './config/constants';
 import {
   fetchConfig,
@@ -29,9 +28,8 @@ import {
   getCachedTeamPlanning,
   ensureResponsableAdmin,
   getStoreName,
-  saveStoreName,
   verifyApiTokenWithStore,
-  clearAdminSession,
+  clearAdminSession
 } from './services/api';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
@@ -56,7 +54,7 @@ const STORAGE_KEY_TOKEN_VALIDATED = 'planning_token_validated';
 
 export default function App() {
   const isOnline = useOnlineStatus();
-  const { theme, isDark } = useTheme();
+  useTheme();
 
   // Mandatory Token Gate State
   const [isTokenValidated, setIsTokenValidated] = useState<boolean>(() => {
@@ -71,12 +69,6 @@ export default function App() {
   useEffect(() => {
     document.title = `${storeName || 'CanoShift'} · CanoShift`;
   }, [storeName]);
-
-  const handleUpdateStoreName = (name: string) => {
-    const trimmed = (name || '').trim() || DEFAULT_STORE_NAME;
-    saveStoreName(trimmed);
-    setStoreName(trimmed);
-  };
 
   // App Configuration with strictly enforced Responsable Admin
   const [employees, setEmployees] = useState<Employee[]>(() => {
@@ -279,7 +271,7 @@ export default function App() {
     };
   }, []);
 
-  const handleTokenSuccess = (token: string, store?: { id: string; name: string; token: string }) => {
+  const handleTokenSuccess = (_token: string, store?: { id: string; name: string; token: string }) => {
     localStorage.setItem(STORAGE_KEY_TOKEN_VALIDATED, 'true');
     setTokenRevokedMessage('');
     setIsTokenValidated(true);
@@ -663,7 +655,6 @@ export default function App() {
   if (!isTokenValidated) {
     return (
       <TokenGate
-        storeName={storeName}
         infoMessage={tokenRevokedMessage}
         onTokenSuccess={handleTokenSuccess}
       />
@@ -684,7 +675,6 @@ export default function App() {
         onRefresh={handleManualRefresh}
         isSyncing={isSyncing}
         lastSyncTime={lastSyncTime}
-        isOffline={!isOnline || isDataOffline}
         isRealtimeConnected={isRealtimeConnected}
       />
 
@@ -704,7 +694,6 @@ export default function App() {
               currentEmployee={currentEmployee}
               schedule={mySchedule}
               isLoading={isLoadingMySchedule}
-              isOffline={!isOnline || isDataOffline}
               selectedMonth={selectedMonth}
               allMonths={allMonths}
               visibleMonths={visibleMonths}
@@ -754,8 +743,6 @@ export default function App() {
             selectedMonth={selectedMonth}
             allMonths={allMonths}
             visibleMonths={visibleMonths}
-            isLoading={isLoadingTeam}
-            isOffline={!isOnline || isDataOffline}
             onSelectMonth={handleSelectMonth}
             onRefresh={handleManualRefresh}
           />
@@ -771,9 +758,7 @@ export default function App() {
             onUpdateEmployees={handleUpdateEmployees}
             onUpdateVisibleMonths={handleUpdateVisibleMonths}
             onUpdateAllMonths={handleUpdateAllMonths}
-            onSwitchToProfile={handleSelectEmployee}
                         onPlanningImported={handlePlanningImported}
-            onUpdateStoreName={handleUpdateStoreName}
             onBackToPlanning={() => setActiveTab('my-planning')}
           />
         )}

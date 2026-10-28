@@ -22,13 +22,9 @@ import {
   AlertTriangle,
   FileCheck,
   Calendar,
-  Users,
-  Clock,
-  Sparkles,
   Info,
-  ArrowRight,
   RefreshCw,
-  Printer,
+  Printer
 } from 'lucide-react';
 
 interface AdminExcelSectionProps {
@@ -36,7 +32,6 @@ interface AdminExcelSectionProps {
   employees: Employee[];
   allMonths: MonthItem[];
   selectedMonth: string;
-  teamSchedules: Record<string, EmployeeMonthSchedule>;
   tableau2Options: Tableau2ShiftOption[];
   onPlanningImported: (
     monthKey: string,
@@ -51,7 +46,6 @@ export const AdminExcelSection: React.FC<AdminExcelSectionProps> = ({
   employees,
   allMonths,
   selectedMonth,
-  teamSchedules,
   tableau2Options,
   onPlanningImported,
 }) => {

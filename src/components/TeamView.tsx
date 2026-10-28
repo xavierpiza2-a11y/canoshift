@@ -769,7 +769,6 @@ export const TeamView: React.FC<TeamViewProps> = ({
               const dayData = schedule?.days ? schedule.days[selectedDate] : undefined;
               const rawShift = (dayData?.shift || '').trim();
               const hours = dayData?.hours;
-              const info = dayData?.info;
               const status = getShiftDayStatus(rawShift, hours);
 
               return (
@@ -937,7 +936,6 @@ export const TeamView: React.FC<TeamViewProps> = ({
         onClose={() => setIsEditModalOpen(false)}
         employees={employees}
         selectedMonth={selectedMonth}
-        allMonths={allMonths}
         initialEmployee={editTargetEmployee}
         initialDate={editTargetDate}
         initialShift={editInitialShift}
