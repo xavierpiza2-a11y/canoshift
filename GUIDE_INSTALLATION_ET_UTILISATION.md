@@ -148,7 +148,6 @@ Dans l'onglet **Administration** > **Serveur & Sauvegardes** :
 - Affiche le planning individuel du mois sélectionné.
 - **Cartes quotidiennes** : Date, jour de la semaine, badge de créneau (ex: MATIN, SOIR, REPOS, CONGÉ), horaires détaillés (ex: `09:00 - 16:30`) et consignes du jour.
 - **Compteur d'heures mensuel** : Calcul automatique et précis du total des heures travaillées.
-- **Export Calendrier (.ics)** : Permet à chaque collaborateur d'ajouter ses horaires dans Google Calendar, Apple Calendar ou Outlook.
 
 ### 3.4 Vue Équipe (« Planning Équipe »)
 - Vue tabulaire horizontale globale affichant tous les salariés pour chaque jour du mois.
@@ -186,9 +185,8 @@ L'application est 100% compatible avec Microsoft Excel et LibreOffice :
   - Un volume d'heures décimales pour les totaux (ex : `7.5`).
   - Une catégorie de couleur (Matin, Soir, Journée, Repos, Congés).
 
-### 3.9 Exports officiels (PDF imprimable, Calendrier ICS)
+### 3.9 Exports officiels (PDF imprimable)
 - **PDF officiel** : Cliquez sur le bouton « Exporter PDF » en haut de l'écran pour obtenir un PDF propre conforme aux exigences d'affichage en entreprise.
-- **Calendrier (.ics)** : Permet d'exporter les heures sur smartphone.
 
 ### 3.10 Installation PWA sur Smartphone / PC
 L'application est une **Progressive Web App (PWA)** :

@@ -129,6 +129,7 @@ export class FailureLimiter {
 // ---------------------------------------------------------------------------
 export function publicConfig<T extends Record<string, any> | null | undefined>(config: T): T {
   if (!config || typeof config !== 'object') return config;
-  const { adminPin: _pin, apiToken: _token, ...rest } = config as Record<string, any>;
+  // Les réglages IA (contraintes par salarié, notes…) ne sont lisibles que par l'admin, via leur route dédiée.
+  const { adminPin: _pin, apiToken: _token, aiPlanning: _ai, ...rest } = config as Record<string, any>;
   return rest as T;
 }

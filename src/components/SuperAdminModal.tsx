@@ -67,6 +67,8 @@ export const SuperAdminModal: React.FC<SuperAdminModalProps> = ({
   // Edit store modal
   const [storeToEdit, setStoreToEdit] = useState<any | null>(null);
   const [editStoreName, setEditStoreName] = useState('');
+  const [editAiPlanning, setEditAiPlanning] = useState(false);
+  const [editAiModels, setEditAiModels] = useState<string[]>(['gemini']);
   const [editStoreToken, setEditStoreToken] = useState('');
   const [editStorePin, setEditStorePin] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
@@ -152,6 +154,10 @@ export const SuperAdminModal: React.FC<SuperAdminModalProps> = ({
   const handleUpdateStore = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!storeToEdit || !editStoreName.trim() || !editStoreToken.trim()) return;
+    if (editAiPlanning && editAiModels.length === 0) {
+      showToast('error', "Choisis au moins un modèle d'IA (Gemini ou Claude).");
+      return;
+    }
 
     setIsUpdating(true);
     try {
@@ -159,6 +165,7 @@ export const SuperAdminModal: React.FC<SuperAdminModalProps> = ({
         name: editStoreName,
         token: editStoreToken,
         adminPin: editStorePin,
+        features: { aiPlanning: editAiPlanning, ...(editAiPlanning ? { aiModels: editAiModels } : {}) },
       });
       if (res.success) {
         showToast('success', `Magasin « ${editStoreName} » mis à jour.`);
@@ -464,6 +471,8 @@ export const SuperAdminModal: React.FC<SuperAdminModalProps> = ({
                               setEditStoreName(s.name);
                               setEditStoreToken(s.token);
                               setEditStorePin(s.adminPin || '000000');
+                              setEditAiPlanning(s.features?.aiPlanning === true);
+                              setEditAiModels(s.features?.aiModels?.length ? s.features.aiModels : ['gemini']);
                             }}
                             className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
                             title="Modifier ce magasin"
@@ -759,6 +768,39 @@ export const SuperAdminModal: React.FC<SuperAdminModalProps> = ({
                   onChange={(e) => setEditStorePin(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   className="w-full text-xs font-mono font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 text-center tracking-widest shadow-xs"
                 />
+              </div>
+
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/50 p-3">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editAiPlanning}
+                    onChange={(e) => setEditAiPlanning(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 accent-emerald-600"
+                  />
+                  <span className="text-xs text-slate-700 dark:text-slate-300 leading-snug">
+                    <b className="text-slate-900 dark:text-white">Module IA de planning</b>
+                    <br />
+                    Génération du planning du mois par IA (onglet « IA planning » côté administrateur du magasin).
+                  </span>
+                </label>
+                {editAiPlanning && (
+                  <div className="mt-3 ml-6 space-y-1.5">
+                    <p className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Modèles proposés à l'administrateur du magasin</p>
+                    {([['gemini', 'Gemini (gratuit possible)'], ['anthropic', 'Claude']] as const).map(([k, label]) => (
+                      <label key={k} className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editAiModels.includes(k)}
+                          onChange={(e) => setEditAiModels(e.target.checked ? [...new Set([...editAiModels, k])] : editAiModels.filter((x) => x !== k))}
+                          className="w-4 h-4 accent-emerald-600"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                    <p className="text-[10px] text-slate-500">Chaque modèle utilise sa clé dans le fichier .env du serveur.</p>
+                  </div>
+                )}
               </div>
 
               <div className="pt-2 flex items-center justify-end gap-2">

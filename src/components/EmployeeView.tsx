@@ -1,17 +1,13 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { Employee, EmployeeMonthSchedule, MonthItem } from '../types/planning';
 import { MonthSelector } from './MonthSelector';
-import { ShiftBadge } from './ShiftBadge';
 import { DayNoteModal } from './DayNoteModal';
-import { categorizeShift, formatHoursReadable } from '../config/constants';
+import { categorizeShift } from '../config/constants';
 import { getCategoryDetails } from '../config/categoryStyles';
 import { getStoredTableau2Shifts, getStoredDayNotes } from '../services/api';
-import { exportScheduleToICS } from '../services/icsExport';
 import { calculateEmployeeBalances } from '../services/hoursService';
 import {
   Calendar as CalendarIcon,
-  ListFilter,
-  Download,
   History,
   Clock,
   Briefcase,
@@ -45,7 +41,6 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
   onRefresh,
   onOpenHistory,
 }) => {
-  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
   const todayRef = useRef<HTMLDivElement | null>(null);
 
   // Day Note Modal State & reactive version counter
@@ -140,7 +135,7 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
     }
   };
 
-  // Automatically jump directly to today whenever view is loaded or month/view changes
+  // Automatically jump directly to today whenever view is loaded or month changes
   React.useEffect(() => {
     if (!isLoading && daysEntries.length > 0) {
       const doScroll = () => {
@@ -157,13 +152,7 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
         clearTimeout(t3);
       };
     }
-  }, [isLoading, daysEntries, viewMode, selectedMonth]);
-
-  const handleExportICS = () => {
-    if (schedule) {
-      exportScheduleToICS(schedule, currentEmployee.name);
-    }
-  };
+  }, [isLoading, daysEntries, selectedMonth]);
 
   const formatWeekdayFrench = (dateStr: string) => {
     try {
@@ -222,43 +211,6 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
       </div>
     );
   };
-
-  // Calendar grid preparation
-  const calendarGrid = useMemo(() => {
-    if (!selectedMonth) return [];
-    const [yearStr, monthStr] = selectedMonth.split('-');
-    const year = parseInt(yearStr, 10);
-    const month = parseInt(monthStr, 10);
-
-    const firstDay = new Date(year, month - 1, 1);
-    const lastDay = new Date(year, month, 0);
-    const totalDays = lastDay.getDate();
-
-    let startDayOfWeek = firstDay.getDay() - 1;
-    if (startDayOfWeek === -1) startDayOfWeek = 6;
-
-    const cells: Array<{
-      dayNumber: number | null;
-      dateKey: string | null;
-      shiftData?: { shift: string; hours?: string; info?: string };
-    }> = [];
-
-    for (let i = 0; i < startDayOfWeek; i++) {
-      cells.push({ dayNumber: null, dateKey: null });
-    }
-
-    for (let d = 1; d <= totalDays; d++) {
-      const dateKey = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      const shiftData = schedule?.days ? schedule.days[dateKey] : undefined;
-      cells.push({
-        dayNumber: d,
-        dateKey,
-        shiftData,
-      });
-    }
-
-    return cells;
-  }, [selectedMonth, schedule]);
 
   return (
     <div className="space-y-4 pb-20">
@@ -443,33 +395,7 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
       </div>
 
       {/* Action Controls & View Switcher */}
-      <div className="flex items-center justify-between gap-2">
-        {/* View Switcher */}
-        <div className="inline-flex p-1 bg-slate-200/70 rounded-lg text-xs font-medium">
-          <button
-            onClick={() => setViewMode('list')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-colors ${
-              viewMode === 'list'
-                ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <ListFilter className="w-3.5 h-3.5" />
-            <span>Liste</span>
-          </button>
-          <button
-            onClick={() => setViewMode('calendar')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-colors ${
-              viewMode === 'calendar'
-                ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <CalendarIcon className="w-3.5 h-3.5" />
-            <span>Grille</span>
-          </button>
-        </div>
-
+      <div className="flex items-center justify-end gap-2">
         {/* Quick Actions */}
         <div className="flex items-center gap-1.5">
           {daysEntries.some(([d]) => d === todayStr) && (
@@ -481,14 +407,6 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
               <span>Aujourd'hui</span>
             </button>
           )}
-
-          <button
-            onClick={handleExportICS}
-            title="Exporter vers mon agenda (iPhone, Android, Outlook)"
-            className="text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 p-2 rounded-lg transition-colors"
-          >
-            <Download className="w-3.5 h-3.5 text-slate-600" />
-          </button>
 
           <button
             onClick={onOpenHistory}
@@ -526,7 +444,7 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
             <span>Actualiser l'affichage</span>
           </button>
         </div>
-      ) : viewMode === 'list' ? (
+      ) : (
         /* List Mode: Clean card with date abbreviation on left & centered enlarged bubble */
         <div className="space-y-2.5">
           {daysEntries.map(([dateStr, dayShift]) => {
@@ -608,101 +526,6 @@ export const EmployeeView: React.FC<EmployeeViewProps> = ({
               </div>
             );
           })}
-        </div>
-      ) : (
-        /* Calendar Grid Mode */
-        <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs">
-          <div className="grid grid-cols-7 gap-1 text-center mb-2">
-            {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((d, i) => (
-              <span
-                key={d}
-                className={`text-[11px] font-bold ${
-                  i >= 5 ? 'text-slate-400' : 'text-slate-600'
-                }`}
-              >
-                {d}
-              </span>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-7 gap-1">
-            {calendarGrid.map((cell, idx) => {
-              if (!cell.dayNumber) {
-                return (
-                  <div
-                    key={`empty-${idx}`}
-                    className="h-20 bg-slate-50/40 rounded-lg border border-dashed border-slate-100"
-                  />
-                );
-              }
-
-              const isToday = cell.dateKey === todayStr;
-              const shift = cell.shiftData?.shift || '';
-              const hours = cell.shiftData?.hours;
-              const cellDayInfo = cell.dateKey ? (monthDayNotes[cell.dateKey] || '') : '';
-
-              return (
-                <div
-                  key={cell.dateKey}
-                  ref={isToday ? todayRef : null}
-                  className={`min-h-[82px] p-1.5 rounded-lg border flex flex-col justify-between transition-colors ${
-                    isToday
-                      ? 'border-emerald-500 bg-emerald-50/50 ring-1 ring-emerald-500'
-                      : 'border-slate-100 bg-white hover:bg-slate-50/80'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`text-xs font-bold tabular-nums ${
-                        isToday
-                          ? 'w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px]'
-                          : 'text-slate-700'
-                      }`}
-                    >
-                      {cell.dayNumber}
-                    </span>
-                    {cellDayInfo && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" title={cellDayInfo} />
-                    )}
-                  </div>
-
-                  {shift ? (
-                    <div className="mt-1">
-                      <ShiftBadge shift={shift} hours={hours} compact={true} />
-                      {hours && (
-                        <p className="text-[9px] text-slate-500 truncate mt-0.5 font-medium leading-none">
-                          {formatHoursReadable(hours)}
-                        </p>
-                      )}
-                      {cellDayInfo && (
-                        <button
-                          type="button"
-                          onClick={() => cell.dateKey && handleOpenDayNoteModal(cell.dateKey)}
-                          className="mt-1 w-full text-left text-[8.5px] font-semibold text-amber-950 bg-amber-100/90 hover:bg-amber-200 border border-amber-300/80 px-1 py-0.5 rounded truncate leading-tight flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-                          title={`Information : ${cellDayInfo} (Cliquer pour modifier)`}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                          <span className="truncate">{cellDayInfo}</span>
-                        </button>
-                      )}
-                    </div>
-                  ) : cellDayInfo ? (
-                    <button
-                      type="button"
-                      onClick={() => cell.dateKey && handleOpenDayNoteModal(cell.dateKey)}
-                      className="mt-1 w-full text-left text-[8.5px] font-semibold text-amber-950 bg-amber-100/90 hover:bg-amber-200 border border-amber-300/80 px-1 py-0.5 rounded truncate leading-tight flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-                      title={`Information : ${cellDayInfo} (Cliquer pour modifier)`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                      <span className="truncate">{cellDayInfo}</span>
-                    </button>
-                  ) : (
-                    <div className="text-[10px] text-slate-300 italic">—</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
         </div>
       )}
 

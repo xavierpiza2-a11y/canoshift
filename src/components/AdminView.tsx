@@ -19,11 +19,13 @@ import {
   ensureResponsableAdmin,
   fetchAllHistory,
   deleteAllHistory,
-  deleteEmployeeHistory
+  deleteEmployeeHistory,
+  fetchStoreFeatures
 } from '../services/api';
 import { AdminExcelSection } from './AdminExcelSection';
 import { AdminExercisesSection } from './AdminExercisesSection';
 import { AdminTableau2Section } from './AdminTableau2Section';
+import { AdminAiPlanningSection } from './AdminAiPlanningSection';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -40,6 +42,7 @@ import {
   Edit3,
   FileSpreadsheet,
   Sparkles,
+  Bot,
   AlertTriangle,
   X,
   CheckCircle2,
@@ -93,8 +96,28 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
   // Active Admin Sub-tab: Default to Excel tab as requested
   const [adminTab, setAdminTab] = useState<
-    'excel' | 'shifts_reference' | 'team' | 'months' | 'history' | 'connection'
+    'excel' | 'shifts_reference' | 'team' | 'months' | 'history' | 'connection' | 'ai_planning'
   >('excel');
+
+  // Option « IA de planning » : activée par magasin depuis l'espace gestionnaire (onglet absent sinon)
+  const [aiPlanningEnabled, setAiPlanningEnabled] = useState(false);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let alive = true;
+    fetchStoreFeatures().then((f) => alive && setAiPlanningEnabled(f.aiPlanning));
+    const onSync = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.eventType === 'FEATURES_UPDATED') setAiPlanningEnabled(detail.data?.aiPlanning === true);
+    };
+    window.addEventListener('planning_database_sync', onSync);
+    return () => {
+      alive = false;
+      window.removeEventListener('planning_database_sync', onSync);
+    };
+  }, [isAuthenticated]);
+  useEffect(() => {
+    if (!aiPlanningEnabled && adminTab === 'ai_planning') setAdminTab('excel');
+  }, [aiPlanningEnabled, adminTab]);
 
   const [tableau2Options, setTableau2Options] = useState<Tableau2ShiftOption[]>(
     getStoredTableau2Shifts
@@ -730,7 +753,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
       </div>
 
       {/* Admin Navigation Sub-Tabs */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-semibold">
+      <div className={`grid grid-cols-3 ${aiPlanningEnabled ? 'sm:grid-cols-7' : 'sm:grid-cols-6'} gap-1 bg-slate-200/70 p-1 rounded-xl text-xs font-semibold`}>
         <button
           onClick={() => setAdminTab('excel')}
           className={`py-2 px-1 rounded-lg transition-colors flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center ${
@@ -807,7 +830,26 @@ export const AdminView: React.FC<AdminViewProps> = ({
           <LockKeyhole className="w-3.5 h-3.5 text-slate-700" />
           <span className="text-[11px] sm:text-xs">Code PIN</span>
         </button>
+
+        {aiPlanningEnabled && (
+          <button
+            onClick={() => setAdminTab('ai_planning')}
+            className={`py-2 px-1 rounded-lg transition-colors flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center ${
+              adminTab === 'ai_planning'
+                ? 'bg-white text-emerald-950 font-bold shadow-xs border-b-2 border-emerald-600'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Bot className="w-3.5 h-3.5 text-emerald-700" />
+            <span className="text-[11px] sm:text-xs">IA planning</span>
+          </button>
+        )}
       </div>
+
+      {/* SUB-TAB IA : réglages de la génération de planning (option par magasin) */}
+      {adminTab === 'ai_planning' && aiPlanningEnabled && (
+        <AdminAiPlanningSection employees={employees} allMonths={monthsList} showToast={showToast} />
+      )}
 
       {/* SUB-TAB EXCEL (.xlsx) DIRECT IMPORT / EXPORT */}
       {adminTab === 'excel' && (

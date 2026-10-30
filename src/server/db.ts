@@ -12,6 +12,14 @@ import {
 } from '../config/constants.ts';
 import { coreShiftHours, getMonthDateKeys, generateDefaultDay, buildMonthItem, getExerciseMonthKeys, getExerciseStartYear } from '../shared/planning.ts';
 import { ensureCoreConfig } from '../shared/coreConfig.ts';
+import { normalizeAiSettings, defaultAiSettings, type AiPlanningSettings, type AiProvider, isAiProvider } from '../shared/aiPlanning.ts';
+import type { GenInput, Cell } from '../shared/aiGeneration.ts';
+
+/** Options activables par magasin, réservées au gestionnaire (espace super-admin). */
+export interface StoreFeatures {
+  aiPlanning?: boolean; // module de génération de planning par IA
+  aiModels?: AiProvider[]; // modèles d'IA autorisés pour ce magasin (l'administrateur du magasin choisit parmi eux)
+}
 
 export interface StoreInfo {
   id: string;
@@ -20,6 +28,7 @@ export interface StoreInfo {
   adminPin: string;
   createdAt: string;
   dataFile: string;
+  features?: StoreFeatures;
 }
 
 export interface ServerConfig {
@@ -31,6 +40,7 @@ export interface ServerConfig {
   allMonths: any[];
   tableau2Shifts: any[];
   categories: any[];
+  aiPlanning?: AiPlanningSettings; // réglages de la génération IA (modifiés uniquement par leurs routes dédiées)
 }
 
 export interface DayShiftData {
@@ -378,7 +388,7 @@ export async function dbCreateStore(name: string, token: string, adminPin = DEFA
 
 export async function dbUpdateStore(
   storeId: string,
-  updates: Partial<Pick<StoreInfo, 'name' | 'token' | 'adminPin'>>
+  updates: Partial<Pick<StoreInfo, 'name' | 'token' | 'adminPin' | 'features'>>
 ): Promise<StoreInfo> {
   const store = storesRegistry.find((s) => s.id === storeId);
   if (!store) throw new Error(`Magasin ${storeId} introuvable.`);
@@ -397,6 +407,14 @@ export async function dbUpdateStore(
   }
   if (updates.adminPin !== undefined) {
     store.adminPin = updates.adminPin.trim();
+  }
+  if (updates.features !== undefined) {
+    const models = Array.isArray(updates.features.aiModels) ? [...new Set(updates.features.aiModels.filter(isAiProvider))] : undefined;
+    store.features = {
+      ...(store.features || {}),
+      aiPlanning: updates.features.aiPlanning === true,
+      ...(models && models.length ? { aiModels: models } : {}),
+    };
   }
 
   // Update in-memory state config
@@ -515,6 +533,10 @@ export async function dbGetConfig(storeId?: string): Promise<ServerConfig> {
 
 export async function dbSaveConfig(storeId: string, partialConfig: Partial<ServerConfig>): Promise<ServerConfig> {
   const db = getStoreDb(storeId);
+  // Les réglages IA ne se modifient que par leurs routes dédiées (jamais via la config générale, qui est envoyée en entier par le client).
+  const { aiPlanning: _ignoredAi, ...safePartial } = partialConfig as Partial<ServerConfig> & { features?: unknown };
+  delete (safePartial as any).features;
+  partialConfig = safePartial;
   db.config = {
     ...db.config,
     ...partialConfig,
@@ -538,6 +560,98 @@ export async function dbSaveConfig(storeId: string, partialConfig: Partial<Serve
 
   saveStoreDataFile(storeId);
   return db.config;
+}
+
+// ---------------------------------------------------------------------------
+// OPTIONS PAR MAGASIN + RÉGLAGES DE LA GÉNÉRATION IA
+// ---------------------------------------------------------------------------
+export function dbGetStoreFeatures(storeId?: string): StoreFeatures {
+  const store = storesRegistry.find((s) => s.id === storeId);
+  const models = (store?.features?.aiModels || []).filter(isAiProvider);
+  return { aiPlanning: store?.features?.aiPlanning === true, ...(models.length ? { aiModels: models } : {}) };
+}
+
+/** Réglages IA du magasin (valeurs par défaut si jamais enregistrés), nettoyés selon les salariés actuels. */
+export function dbGetAiSettings(storeId: string): AiPlanningSettings {
+  const db = getStoreDb(storeId);
+  const names = (db.config.employees || []).map((e: any) => e.name);
+  return db.config.aiPlanning ? normalizeAiSettings(db.config.aiPlanning, names) : defaultAiSettings();
+}
+
+/** Valide (mode strict : erreur lisible) puis enregistre les réglages IA. */
+export async function dbSaveAiSettings(storeId: string, raw: unknown): Promise<AiPlanningSettings> {
+  const db = getStoreDb(storeId);
+  const names = (db.config.employees || []).map((e: any) => e.name);
+  const clean = normalizeAiSettings(raw, names, true);
+  db.config.aiPlanning = clean;
+  saveStoreDataFile(storeId);
+  return clean;
+}
+
+export function dbHasMonth(storeId: string, monthKey: string): boolean {
+  return (getStoreDb(storeId).config.allMonths || []).some((m: any) => m.key === monthKey);
+}
+
+/** Rassemble ce dont l'IA a besoin pour un mois (réglages enregistrés, créneaux, journées déjà posées, notes). Lève une erreur lisible si le mois est inconnu. */
+export function dbBuildGenInput(storeId: string, monthKey: string, instructions: string): GenInput {
+  const db = getStoreDb(storeId);
+  if (!(db.config.allMonths || []).some((m: any) => m.key === monthKey)) throw new Error(`Mois inconnu : ${monthKey}`);
+  const settings = dbGetAiSettings(storeId);
+  const existing: GenInput['existing'] = {};
+  for (const e of db.config.employees || []) existing[e.name] = { ...(db.schedules[monthKey]?.[e.name]?.days || {}) } as any;
+  return {
+    monthKey,
+    dateKeys: getMonthDateKeys(monthKey),
+    settings,
+    employees: (db.config.employees || []).map((e: any) => ({ name: e.name, contractType: e.contractType, weeklyHoursQuota: e.weeklyHoursQuota })),
+    existing,
+    dayNotes: { ...(db.dayNotes[monthKey] || {}) },
+    shifts: (db.config.tableau2Shifts || []) as any[],
+    instructions: (instructions || '').slice(0, 2000),
+    storeName: db.config.storeName,
+  };
+}
+
+const isGeneratedDefault = (date: string, c?: { shift?: string; hours?: string; info?: string }) =>
+  !c || !c.shift || (c.shift.trim().toUpperCase() === generateDefaultDay(date).shift && !(c.hours || '').trim() && !(c.info || '').trim());
+
+/**
+ * Écrit les cellules validées d'un brouillon. Ne remplace JAMAIS une journée posée à la main depuis la génération du brouillon
+ * (elle est signalée « ignorée »). Enregistre une seule fois sur disque.
+ */
+export async function dbApplyAiCells(
+  storeId: string, monthKey: string, cells: Cell[]
+): Promise<{ applied: number; unchanged: number; skipped: { employee: string; date: string; reason: string }[]; employees: string[] }> {
+  const db = getStoreDb(storeId);
+  const known = new Set((db.config.employees || []).map((e: any) => e.name));
+  if (!db.schedules[monthKey]) db.schedules[monthKey] = {};
+  const skipped: { employee: string; date: string; reason: string }[] = [];
+  const touched = new Map<string, string[]>();
+  let applied = 0, unchanged = 0;
+  for (const c of cells) {
+    if (!known.has(c.employee) || !c.date.startsWith(monthKey)) { skipped.push({ employee: c.employee, date: c.date, reason: 'salarié ou date inconnu' }); continue; }
+    const sched = db.schedules[monthKey][c.employee] || (db.schedules[monthKey][c.employee] = { employee: c.employee, month: monthKey, days: {}, totalHours: 0 });
+    const cur = sched.days[c.date];
+    if (cur && cur.shift === c.shift && (cur.hours || '') === (c.hours || '')) { unchanged++; continue; }
+    if (!isGeneratedDefault(c.date, cur)) { skipped.push({ employee: c.employee, date: c.date, reason: `journée modifiée depuis la génération (${cur?.shift})` }); continue; }
+    sched.days[c.date] = { shift: c.shift, hours: c.hours || '', info: '' };
+    await dbRecordChange(storeId, c.employee, c.date, c.shift, c.hours, cur?.shift, cur?.hours);
+    (touched.get(c.employee) || touched.set(c.employee, []).get(c.employee)!).push(c.date);
+    applied++;
+  }
+  for (const [name, dates] of touched) {
+    const sched = db.schedules[monthKey][name];
+    let total = 0;
+    for (const d of Object.values(sched.days)) total += calculateShiftDurationHours(d.shift, d.hours, db.config.tableau2Shifts);
+    sched.totalHours = Math.round(total * 100) / 100;
+    await dbRecordHistory(storeId, name, dates.sort()[0], `Planning généré par IA : ${dates.length} jour(s) renseigné(s) pour ${monthKey}`);
+  }
+  if (applied > 0) saveStoreDataFile(storeId);
+  return { applied, unchanged, skipped, employees: [...touched.keys()] };
+}
+
+export function dbGetMonthSchedulesSnapshot(storeId: string, monthKey: string): Record<string, EmployeeScheduleData> {
+  return getStoreDb(storeId).schedules[monthKey] || {};
 }
 
 export interface GenerationSummary {

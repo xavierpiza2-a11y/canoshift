@@ -19,6 +19,7 @@ import {
   DEFAULT_CATEGORIES
 } from '../config/constants';
 import { realtimeClient, RealtimeMessage } from './realtimeClient';
+import type { AiPlanningSettings } from '../shared/aiPlanning';
 
 // Local storage display cache keys
 const KEY_ACTIVE_STORE_ID = 'planning_active_store_id';
@@ -248,6 +249,10 @@ if (typeof window !== 'undefined') {
           }
         }
         notifyDataChange('CONFIG_UPDATED', msg.config);
+        break;
+      }
+      case 'FEATURES_UPDATED': {
+        notifyDataChange('FEATURES_UPDATED', msg.features);
         break;
       }
       case 'SCHEDULES_UPDATED': {
@@ -1292,7 +1297,7 @@ export async function superAdminCreateStore(
 
 export async function superAdminUpdateStore(
   storeId: string,
-  updates: { name?: string; token?: string; adminPin?: string }
+  updates: { name?: string; token?: string; adminPin?: string; features?: { aiPlanning?: boolean; aiModels?: string[] } }
 ): Promise<{ success: boolean; store?: any; error?: string }> {
   try {
     const res = await authFetch(`${import.meta.env.BASE_URL}api/superadmin/stores/${storeId}`, {
@@ -1355,6 +1360,106 @@ export async function superAdminResetStore(storeId: string): Promise<{ success: 
       return { success: true };
     }
     return { success: false, error: data.error || 'Erreur lors de la réinitialisation.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erreur réseau.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Options du magasin et réglages de la génération de planning par IA
+// ---------------------------------------------------------------------------
+export interface StoreFeatures {
+  aiPlanning: boolean;
+}
+
+/** Options activées par le gestionnaire pour ce magasin (tout désactivé en cas d'erreur). */
+export async function fetchStoreFeatures(): Promise<StoreFeatures> {
+  try {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/features`);
+    if (!res.ok) return { aiPlanning: false };
+    const data = await res.json();
+    return { aiPlanning: data?.features?.aiPlanning === true };
+  } catch {
+    return { aiPlanning: false };
+  }
+}
+
+export async function fetchAiPlanningSettings(): Promise<{ success: boolean; settings?: AiPlanningSettings; error?: string }> {
+  try {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/ai-planning/settings`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) return { success: true, settings: data.settings };
+    return { success: false, error: data.error || 'Impossible de charger les réglages.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erreur réseau.' };
+  }
+}
+
+export async function saveAiPlanningSettings(
+  settings: AiPlanningSettings
+): Promise<{ success: boolean; settings?: AiPlanningSettings; error?: string }> {
+  try {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/ai-planning/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) return { success: true, settings: data.settings };
+    return { success: false, error: data.error || "Impossible d'enregistrer les réglages." };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erreur réseau.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Génération du planning par IA : état, brouillon, application
+// ---------------------------------------------------------------------------
+export interface AiModelInfo { provider: 'gemini' | 'anthropic'; label: string; model: string; configured: boolean }
+export interface AiStatus { configured: boolean; provider: 'gemini' | 'anthropic'; model: string; allowed: AiModelInfo[]; limitPerHour: number; remaining: number; retryAfterMinutes: number }
+export interface AiDraftStat { employee: string; targetHours: number; plannedHours: number; delta: number; workingDays: number; changes: number }
+export interface AiDraftView {
+  draftId: string; monthKey: string; provider: string; model: string; repaired: boolean; comment: string;
+  stats: AiDraftStat[]; warnings: string[]; warningsTotal: number;
+  ignored: { employee: string; date: string; reason: string }[]; ignoredTotal: number; missing: number; changes: number; autoRest: number;
+  grid: { dates: string[]; open: Record<string, boolean>; employees: string[]; cells: Record<string, Record<string, { shift: string; changed: boolean; locked: boolean }>> };
+}
+export interface AiGenerateRequest {
+  monthKey: string; instructions: string; // tous les autres paramètres sont les réglages ENREGISTRÉS du magasin
+}
+
+export async function fetchAiStatus(): Promise<{ success: boolean; status?: AiStatus; error?: string }> {
+  try {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/ai-planning/status`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) return { success: true, status: data as AiStatus };
+    return { success: false, error: data.error || "Impossible de lire l'état de l'IA." };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erreur réseau.' };
+  }
+}
+
+export async function generateAiDraft(req: AiGenerateRequest): Promise<{ success: boolean; draft?: AiDraftView; remaining?: number; error?: string; code?: string }> {
+  try {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/ai-planning/generate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) return { success: true, draft: data.draft, remaining: data.remaining };
+    return { success: false, error: data.error || 'La génération a échoué.', code: data.code };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erreur réseau.' };
+  }
+}
+
+export async function applyAiDraft(draftId: string): Promise<{ success: boolean; applied?: number; unchanged?: number; skipped?: { employee: string; date: string; reason: string }[]; error?: string; code?: string }> {
+  try {
+    const res = await authFetch(`${import.meta.env.BASE_URL}api/ai-planning/apply`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draftId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) return { success: true, applied: data.applied, unchanged: data.unchanged, skipped: data.skipped };
+    return { success: false, error: data.error || "L'application a échoué.", code: data.code };
   } catch (err: any) {
     return { success: false, error: err.message || 'Erreur réseau.' };
   }

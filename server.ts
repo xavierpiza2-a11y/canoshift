@@ -4,6 +4,10 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { AiSettingsError } from './src/shared/aiPlanning.ts';
+import { readAiConfig, allowedProviders, chooseProvider, providerOverview, acquireGeneration, refundGeneration, rateStatus, getDraft, deleteDraft, AiProviderError } from './src/server/aiProviders.ts';
+import { isAiProvider } from './src/shared/aiPlanning.ts';
+import { generateDraft } from './src/server/aiPlanningService.ts';
 import {
   initDatabase,
   getDatabaseStatus,
@@ -12,6 +16,12 @@ import {
   dbGetStoreByToken,
   dbCreateStore,
   dbUpdateStore,
+  dbGetStoreFeatures,
+  dbGetAiSettings,
+  dbSaveAiSettings,
+  dbApplyAiCells,
+  dbGetMonthSchedulesSnapshot,
+  dbHasMonth,
   dbDeleteStore,
   dbGetStoreStats,
   dbGetConfig,
@@ -92,6 +102,17 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
     return res.status(403).json({ success: false, error: 'Droits administrateur requis', code: 'ADMIN_REQUIRED' });
   }
   next();
+}
+
+/** Module réservé aux magasins pour lesquels le gestionnaire a activé l'option (sinon 403, même si le bouton est forcé). */
+function requireFeature(feature: 'aiPlanning') {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const storeId = (req as any).auth?.storeId as string | undefined;
+    if (!dbGetStoreFeatures(storeId)[feature]) {
+      return res.status(403).json({ success: false, error: "Option non activée pour ce magasin", code: 'FEATURE_DISABLED' });
+    }
+    next();
+  };
 }
 
 function requireSuper(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -367,6 +388,7 @@ app.get('/api/superadmin/stores', (_req, res) => {
   try {
     const stores = dbGetStores().map((s) => ({
       ...s,
+      features: { ...(s.features || {}), aiModels: allowedProviders(dbGetStoreFeatures(s.id)) },
       stats: dbGetStoreStats(s.id),
     }));
     res.json({ success: true, stores });
@@ -395,11 +417,23 @@ app.post('/api/superadmin/stores', async (req, res) => {
 app.put('/api/superadmin/stores/:storeId', async (req, res) => {
   try {
     const { storeId } = req.params;
-    const { name, token, adminPin } = req.body;
+    const { name, token, adminPin, features } = req.body;
     const beforeStore = dbGetStoreById(storeId);
     const prevToken = beforeStore?.token;
     const prevPin = beforeStore?.adminPin;
-    const updatedStore = await dbUpdateStore(storeId, { name, token, adminPin });
+    if (features && typeof features === 'object' && features.aiPlanning === true && Array.isArray(features.aiModels) && !features.aiModels.some(isAiProvider)) {
+      return res.status(400).json({ success: false, error: "Choisis au moins un modèle d'IA (Gemini ou Claude)." });
+    }
+    const prevFeatures = dbGetStoreFeatures(storeId);
+    const updatedStore = await dbUpdateStore(storeId, {
+      name,
+      token,
+      adminPin,
+      ...(features && typeof features === 'object' ? { features: { aiPlanning: features.aiPlanning === true, aiModels: Array.isArray(features.aiModels) ? features.aiModels : undefined } } : {}),
+    });
+    if (JSON.stringify(dbGetStoreFeatures(storeId)) !== JSON.stringify(prevFeatures)) {
+      broadcast({ type: 'FEATURES_UPDATED', storeId, features: dbGetStoreFeatures(storeId) });
+    }
 
     broadcast({
       type: 'STORE_UPDATED',
@@ -566,6 +600,100 @@ app.post('/api/config', requireAdmin, async (req, res) => {
     }
 
     res.json({ success: true, storeId, config: publicConfig(updated) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Options du magasin (lecture seule côté magasin : seul le gestionnaire les modifie)
+app.get('/api/features', (req, res) => {
+  res.json({ success: true, features: dbGetStoreFeatures(resolveStoreId(req)) });
+});
+
+// Réglages de la génération de planning par IA (admin + option activée)
+app.get('/api/ai-planning/settings', requireAdmin, requireFeature('aiPlanning'), (req, res) => {
+  try {
+    res.json({ success: true, settings: dbGetAiSettings(resolveStoreId(req)) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/ai-planning/settings', requireAdmin, requireFeature('aiPlanning'), async (req, res) => {
+  try {
+    const storeId = resolveStoreId(req);
+    const wanted = req.body?.settings?.model;
+    if (wanted !== undefined && wanted !== null && wanted !== '' && !allowedProviders(dbGetStoreFeatures(storeId)).includes(wanted)) {
+      return res.status(400).json({ success: false, error: "Ce modèle d'IA n'est pas autorisé pour ce magasin." });
+    }
+    const settings = await dbSaveAiSettings(storeId, req.body?.settings);
+    res.json({ success: true, settings });
+  } catch (err: any) {
+    res.status(err instanceof AiSettingsError ? 400 : 500).json({ success: false, error: err.message });
+  }
+});
+
+// --- Génération par IA : état, génération d'un brouillon, application après validation ---
+/** Modèle d'IA du magasin : choix de l'administrateur parmi les modèles autorisés par le gestionnaire. */
+function storeAiProvider(storeId: string) {
+  const allowed = allowedProviders(dbGetStoreFeatures(storeId));
+  return { allowed, provider: chooseProvider(dbGetAiSettings(storeId).model, allowed) };
+}
+
+app.get('/api/ai-planning/status', requireAdmin, requireFeature('aiPlanning'), (req, res) => {
+  const storeId = resolveStoreId(req);
+  const { allowed, provider } = storeAiProvider(storeId);
+  const cfg = readAiConfig(process.env, provider);
+  const st = rateStatus(storeId, cfg.maxPerHour);
+  // Jamais la clé : seulement si elle est configurée, le fournisseur et le modèle
+  res.json({
+    success: true, configured: cfg.configured, provider: cfg.provider, model: cfg.model,
+    allowed: providerOverview(allowed), limitPerHour: cfg.maxPerHour, remaining: st.remaining, retryAfterMinutes: st.retryAfterMinutes,
+  });
+});
+
+app.post('/api/ai-planning/generate', requireAdmin, requireFeature('aiPlanning'), async (req, res) => {
+  const storeId = resolveStoreId(req);
+  const { provider } = storeAiProvider(storeId);
+  const cfg = readAiConfig(process.env, provider);
+  if (!cfg.configured) {
+    const who = provider === 'anthropic' ? 'Claude (ANTHROPIC_API_KEY)' : 'Gemini (GEMINI_API_KEY)';
+    return res.status(503).json({ success: false, code: 'AI_NOT_CONFIGURED', error: `L'IA n'est pas configurée sur le serveur : clé ${who} absente du fichier .env.` });
+  }
+  const monthKey = String(req.body?.monthKey || '');
+  const instructions = typeof req.body?.instructions === 'string' ? req.body.instructions : '';
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) return res.status(400).json({ success: false, error: 'Mois invalide.' });
+  if (!dbHasMonth(storeId, monthKey)) return res.status(400).json({ success: false, error: `Mois inconnu : ${monthKey}` });
+  const slot = acquireGeneration(storeId, cfg.maxPerHour);
+  if (!slot.ok) return res.status(slot.status).json({ success: false, error: slot.error, code: slot.status === 429 ? 'AI_RATE_LIMIT' : 'AI_BUSY' });
+  try {
+    const view = await generateDraft(storeId, { monthKey, instructions }, cfg);
+    const st = rateStatus(storeId, cfg.maxPerHour);
+    res.json({ success: true, draft: view, remaining: st.remaining, limitPerHour: cfg.maxPerHour });
+  } catch (err: any) {
+    // Panne du fournisseur ou réponse inexploitable : la génération n'est pas décomptée
+    if (err instanceof AiProviderError || /Mois inconnu/.test(err?.message || '')) refundGeneration(storeId);
+    const status = err instanceof AiProviderError ? err.status : /Mois inconnu/.test(err?.message || '') ? 400 : 500;
+    console.error(`[IA] échec magasin=${storeId} mois=${monthKey} : ${err?.message}`);
+    res.status(status).json({ success: false, error: err?.message || 'Erreur lors de la génération.' });
+  } finally {
+    slot.release();
+  }
+});
+
+app.post('/api/ai-planning/apply', requireAdmin, requireFeature('aiPlanning'), async (req, res) => {
+  try {
+    const storeId = resolveStoreId(req);
+    const draft = getDraft(storeId, String(req.body?.draftId || ''));
+    if (!draft) return res.status(404).json({ success: false, error: 'Brouillon expiré ou introuvable : relance la génération.', code: 'DRAFT_GONE' });
+    const only = Array.isArray(req.body?.employees) ? new Set(req.body.employees.map(String)) : null;
+    const cells = only ? draft.cells.filter((c) => only.has(c.employee)) : draft.cells;
+    const result = await dbApplyAiCells(storeId, draft.monthKey, cells);
+    deleteDraft(draft.id);
+    if (result.applied > 0) {
+      broadcast({ type: 'SCHEDULES_UPDATED', storeId, monthKey: draft.monthKey, teamSchedules: dbGetMonthSchedulesSnapshot(storeId, draft.monthKey) });
+    }
+    res.json({ success: true, ...result });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

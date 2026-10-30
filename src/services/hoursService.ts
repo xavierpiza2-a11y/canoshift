@@ -631,8 +631,9 @@ export function calculateEmployeeBalances(params: {
       const effDays = Math.max(0, mCal.netWorkingDays - mCP - mCFA);
       expectedExerciseHoursToDate += effDays * dailyQuota;
     } else if (contractType === 'ANNUALISE') {
-      // Future months in exercise: if already entered in schedule, use mHours, otherwise use standard theoretical base
-      if (mHours > 0) {
+      // Mois à venir : on prend le planning saisi (même s'il vaut 0 h, par ex. un mois entier de congés) ;
+      // la base théorique ne sert que si le mois n'a aucun planning.
+      if (sched?.days || (sched?.totalHours ?? 0) > 0) {
         futureProjectedHours += mHours;
       } else {
         futureProjectedHours += mCal.standardBaseHours;
@@ -652,7 +653,9 @@ export function calculateEmployeeBalances(params: {
     : 0;
 
   // Projected end of exercise (May 31):
-  // Realized hours + future projected hours - remaining un-taken leave adjustment
+  // Realized hours + future projected hours - remaining un-taken leave adjustment.
+  // La déduction des CP restants porte sur le TOTAL (et non sur le seul futur) : le résultat est ainsi
+  // identique quel que soit le mois affiché, y compris en avril/mai où il reste peu ou pas de mois à venir.
   const paidLeaveTotal = employee.paidLeaveTotal ?? 25;
   const initialLeaveTaken = exerciseInitials.leaveTaken;
   const paidLeaveTaken = initialLeaveTaken + leaveShiftsCount;
@@ -662,7 +665,7 @@ export function calculateEmployeeBalances(params: {
   const futureLeaveDeductionHours = paidLeaveRemaining * 7;
   const projectedExerciseEndHours = isAnnualised
     ? Math.round(
-        Math.max(0, totalExerciseHours + Math.max(0, futureProjectedHours - futureLeaveDeductionHours)) * 10
+        Math.max(0, totalExerciseHours + futureProjectedHours - futureLeaveDeductionHours) * 10
       ) / 10
     : 0;
 
